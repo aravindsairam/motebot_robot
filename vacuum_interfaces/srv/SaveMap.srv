@@ -1,0 +1,11 @@
+# Save the map being built. Only valid in mapping mode. Served on /save_map.
+# The saved map becomes the one used for localization and navigation.
+# A name that is already taken is refused (name_taken true) unless replace is true, so a map is
+# never overwritten by accident.
+string name         # file name without extension; empty means "house"
+bool replace        # overwrite a saved map of the same name
+---
+bool success
+string message
+string path         # full path of the saved .yaml file
+bool name_taken     # refused because a map of that name exists and replace was false

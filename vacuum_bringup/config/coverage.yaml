@@ -1,0 +1,41 @@
+# Cleaning: the planner's settings and the cleaning node's (vacuum_coverage).
+# Lengths in metres, speeds in m/s, times in seconds. The values are starting points; the ones
+# marked "measure" are to be measured on the simulator and the measured values put here.
+cleaning_node:
+  ros__parameters:
+    # --- the plan (docs/2026-11-18-coverage-cleaning-plan.md, section 7.3)
+    cleaning_width: 0.30        # floor cleaned in one pass (the model has no brush: a disc this wide)
+    row_spacing: 0.25           # between rows: 5 cm of overlap, about the worst localization error measured
+    row_clearance: 0.25         # robot centre to walls, furniture, unknown space and no-go zones on rows (8 cm body gap)
+    edge_clearance: 0.20        # the same on the pass along the edges (3 cm body gap; Nav2's own limit is 0.175)
+    transit_clearance: 0.20     # decides which parts can be reached at all
+    small_obstacle_area: 0.015  # m2: obstacles this small on the map (furniture legs) count bigger by ...
+    small_obstacle_margin: 0.05 # ... this: the lidar sees a thin leg bigger than the map, and Nav2's
+                                # controller would not pass between two desk legs (phase 20, row 39)
+    min_row_length: 0.20        # shorter rows are left out and counted
+    min_edge_length: 0.30       # shorter straight stretches of edge are not driven
+    max_connector_length: 0.50  # a longer hop between rows is a transit planned by Nav2
+    min_extra_area: 0.02        # m2: uncovered floor smaller than this is not worth an extra row
+    spot_size: 1.5              # side of the square a spot clean covers
+    area_margin: 0.05           # with an area or a spot, rows keep the robot's centre this far inside its edge
+                                # (phase 23 measured up to 5.4 cm of overshoot past rows fitted right to the edge)
+    cleaning_speed: 0.20        # matches CleanRow's desired_linear_vel in nav2.yaml
+    transit_speed: 0.18         # measure: average speed on transits
+    transit_detour: 1.3         # measure: transit length over straight distance
+    turn_time: 3.0              # measure: seconds per turn on the spot (phase 19 reports it)
+    edges_by_default: false     # the edge pass when a job does not say; turn on once phase 26 passes
+
+    # --- driving (section 7.4)
+    row_controller: CleanRow           # controller_server ids in nav2.yaml
+    row_goal_checker: row_goal_checker
+    goal_tolerance: 0.10        # a piece that fails this close to its end counts as done
+    rejoin_distance: 0.30       # farther from its line than this, the robot goes back to it by a transit first
+    max_skips_in_a_row: 3       # this many blocked rows one after the other fail the job
+    piece_timeout_margin: 30.0  # s allowed per piece beyond its length at half cleaning speed
+    transit_timeout: 180.0      # s allowed for one transit
+
+    # --- recording and reporting (sections 7.5 to 7.7)
+    record_rate: 10.0           # robot positions read per second while cleaning
+    status_rate: 5.0            # /cleaning/status at least this often (the mode manager allows 1 s of silence)
+    cleaned_rate: 1.0           # /cleaning/cleaned at most this often
+    history_size: 50            # records kept per map; the totals count every clean

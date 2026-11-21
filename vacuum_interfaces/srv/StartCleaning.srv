@@ -1,0 +1,12 @@
+# Start a cleaning job: /cleaning/start, served by the cleaning node.
+# Answered once the job has been checked and planned (about a second), BEFORE the robot switches
+# to cleaning mode. Refused, with the reason, when another job is active, the robot is mapping,
+# there is no saved map, there is no floor the robot can reach, or the plan name is unknown. If the
+# mode manager then refuses cleaning mode, the job ends as failed, with its reason in the status.
+# Progress is on /cleaning/status; a job is stopped by changing the mode (idle, docking, ...).
+CleaningJob job
+---
+bool accepted
+string message                # the reason when refused; otherwise a summary of the plan
+uint32 job_id                 # the accepted job's number, as in /cleaning/status and /cleaning/plan
+CleaningEstimate estimate

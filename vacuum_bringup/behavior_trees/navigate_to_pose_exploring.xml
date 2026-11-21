@@ -1,0 +1,45 @@
+<!--
+  The tree Nav2 uses in exploring mode: navigate_to_pose_w_replanning_and_recovery.xml (this
+  project's copy of Nav2's stock tree, which names general_goal_checker) with TWO moves taken out
+  of the recovery sequence: Spin and BackUp.
+
+  Why: while exploring, the map has no no-go zones yet, so a drop the lidar cannot see (stairs) is
+  protected only by the cliff sensors, and the robot has none at the back. A spin followed by a
+  30 cm back-up next to such a drop can put the wheels over the edge. With this tree a goal that
+  fails is retried after clearing the costmaps and waiting; Nav2 never reverses the robot.
+
+  A robot that is boxed in cannot free itself under this tree: the goal fails, the explorer gives
+  that place up, and the exploration ends if nothing else is reachable.
+
+  The mode manager names this tree (default_nav_to_pose_bt_xml) each time it starts Nav2 for
+  exploring, and the normal one each time it starts Nav2 for anything else.
+-->
+
+<root main_tree_to_execute="MainTree">
+  <BehaviorTree ID="MainTree">
+    <RecoveryNode number_of_retries="6" name="NavigateRecovery">
+      <PipelineSequence name="NavigateWithReplanning">
+        <RateController hz="1.0">
+          <RecoveryNode number_of_retries="1" name="ComputePathToPose">
+            <ComputePathToPose goal="{goal}" path="{path}" planner_id="GridBased"/>
+            <ClearEntireCostmap name="ClearGlobalCostmap-Context" service_name="global_costmap/clear_entirely_global_costmap"/>
+          </RecoveryNode>
+        </RateController>
+        <RecoveryNode number_of_retries="1" name="FollowPath">
+          <FollowPath path="{path}" controller_id="FollowPath" goal_checker_id="general_goal_checker"/>
+          <ClearEntireCostmap name="ClearLocalCostmap-Context" service_name="local_costmap/clear_entirely_local_costmap"/>
+        </RecoveryNode>
+      </PipelineSequence>
+      <ReactiveFallback name="RecoveryFallback">
+        <GoalUpdated/>
+        <RoundRobin name="RecoveryActions">
+          <Sequence name="ClearingActions">
+            <ClearEntireCostmap name="ClearLocalCostmap-Subtree" service_name="local_costmap/clear_entirely_local_costmap"/>
+            <ClearEntireCostmap name="ClearGlobalCostmap-Subtree" service_name="global_costmap/clear_entirely_global_costmap"/>
+          </Sequence>
+          <Wait wait_duration="5"/>
+        </RoundRobin>
+      </ReactiveFallback>
+    </RecoveryNode>
+  </BehaviorTree>
+</root>

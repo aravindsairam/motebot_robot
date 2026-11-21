@@ -1,0 +1,25 @@
+# The safety gate (vacuum_safety): the only node that commands the wheels.
+safety_gate:
+  ros__parameters:
+    publish_rate: 50.0          # Hz, wheel command on /cmd_vel_safe
+    status_rate: 10.0           # Hz, /safety_status (also sent at once whenever something changes)
+
+    # A source that stops sending counts as "stop" after this long. A held keyboard key sends its
+    # second message 0.5 s after the first (the keyboard's repeat delay), so the timeout has to
+    # be a little longer than that or keyboard driving stutters when it starts.
+    command_timeout: 0.6        # s
+    mode_timeout: 1.5           # s without /robot_state (sent twice a second) before nobody may drive
+    sensor_timeout: 0.5         # s without cliff or bumper data before forward motion is refused
+
+    cliff_threshold: 0.05       # m; the sensors read 0.015 over floor. Further, or nothing, is a drop.
+
+    # Reflex on a cliff ahead or a bumper press while driving
+    backoff_speed: 0.10         # m/s in reverse
+    backoff_after_clear: 0.4    # s to keep reversing once the hazard is no longer seen (4 cm)
+    backoff_max: 2.0            # s, then give up reversing and just refuse forward motion
+    forward_pause: 1.0          # s after the reflex during which forward motion is refused
+    motion_window: 0.5          # s after the last non-zero command that the robot counts as moving
+
+    # Limits of the Create 3 base; anything faster is clamped
+    max_linear: 0.306           # m/s
+    max_angular: 1.9            # rad/s

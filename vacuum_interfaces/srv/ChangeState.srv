@@ -1,0 +1,9 @@
+# Ask the mode manager to change mode. Served on /change_state.
+# The call returns when the change has finished or failed.
+# Asked for while another change is in progress, idle and failsafe (the requests that stop the
+# robot) wait for it to finish, up to 120 s, and are then applied. Any other request is refused
+# as busy.
+string new_state
+---
+bool success
+string message      # what happened, or why the request was refused

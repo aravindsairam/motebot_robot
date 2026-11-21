@@ -1,0 +1,5 @@
+# The cleans recorded on the map in use, newest first, and the lifetime totals: /cleaning/history.
+uint32 max_records            # 0: every record kept
+---
+CleaningRecord[] records
+CleaningTotals totals

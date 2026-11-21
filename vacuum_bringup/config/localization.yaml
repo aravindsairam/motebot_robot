@@ -1,0 +1,59 @@
+# Localization on a saved map: map_server + AMCL. Both are lifecycle nodes switched by the mode
+# manager, which also tells map_server which map to load and AMCL where the robot is.
+# AMCL values start from the stock Nav2 Humble file; lines marked "changed" differ from it.
+map_server:
+  ros__parameters:
+    yaml_filename: ""              # set by the mode manager before it configures the node
+
+amcl:
+  ros__parameters:
+    # Frames and topics
+    global_frame_id: "map"
+    odom_frame_id: "odom"
+    base_frame_id: "base_link"     # changed: the robot has no base_footprint
+    scan_topic: scan
+    tf_broadcast: true
+    transform_tolerance: 1.0
+
+    # The mode manager publishes the starting pose on /initialpose each time it activates AMCL:
+    # the dock at first start, otherwise wherever mapping or the last localization left off.
+    set_initial_pose: false
+    always_reset_initial_pose: false
+
+    # Odometry model: how much each guess is scattered when the robot moves.
+    # Our wheel odometry errs by about 1 % in turns and 0.5 deg per metre.
+    robot_model_type: "nav2_amcl::DifferentialMotionModel"
+    alpha1: 0.1                    # changed from 0.2: turn error caused by turning
+    alpha2: 0.1                    # changed from 0.2: turn error caused by driving
+    alpha3: 0.1                    # changed from 0.2: distance error caused by driving
+    alpha4: 0.1                    # changed from 0.2: distance error caused by turning
+    alpha5: 0.2                    # unused by the differential model
+
+    # Lidar model: how well a guess's predicted scan must match the real one.
+    laser_model_type: "likelihood_field"
+    laser_min_range: 0.05          # changed: our lidar's limits
+    laser_max_range: 12.0          # changed
+    max_beams: 120                 # changed from 60: use more of the 720 beams
+    sigma_hit: 0.1                 # changed from 0.2: lidar noise is 1-5 cm, mapped walls are 15 cm thick
+    laser_likelihood_max_dist: 2.0
+    z_hit: 0.5
+    z_rand: 0.5
+    z_max: 0.05
+    z_short: 0.05
+    lambda_short: 0.1
+    do_beamskip: false
+    beam_skip_distance: 0.5
+    beam_skip_threshold: 0.3
+    beam_skip_error_threshold: 0.9
+
+    # Particle filter
+    min_particles: 500
+    max_particles: 2000
+    pf_err: 0.05
+    pf_z: 0.99
+    resample_interval: 1
+    update_min_d: 0.1              # changed from 0.25: update after 10 cm, the robot is small and slow
+    update_min_a: 0.1              # changed from 0.2: or after about 6 degrees of turning
+    recovery_alpha_fast: 0.0
+    recovery_alpha_slow: 0.0
+    save_pose_rate: 0.5

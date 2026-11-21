@@ -1,0 +1,10 @@
+# Save a job under a name, with the rows planned for it: /cleaning/save_plan. A name already taken
+# is refused (name_taken) unless replace is true.
+string name                   # 1 to 40 letters, digits, spaces, '-' or '_'
+CleaningJob job               # what to clean (what = PLAN is not allowed here)
+bool replace
+---
+bool success
+string message
+bool name_taken
+CleaningEstimate estimate

@@ -1,0 +1,87 @@
+# Exploring: the robot maps the house by itself.
+#
+# Two programs read this file:
+#   exploration_node   (vacuum_exploration) owns the explorer and judges when exploring is finished
+#   frontier_explorer  (frontier_exploration_ros2, used unchanged) picks the next place to look at
+#                      and sends Nav2 there. The exploration node starts it with this file, one
+#                      program per exploration; its own launch file is not used (it would silently
+#                      override five of the settings below).
+#
+# Robot facts used below: round body 0.171 m radius, Nav2 drives at 0.25 m/s here, doorway 0.8 m,
+# slam_toolbox publishes the map every 2 s, lidar 12 m all round.
+
+exploration_node:
+  ros__parameters:
+    time_limit: 1200.0        # s of robot time; then it ends early, with the map kept
+    # s of robot time with the explorer alive and no goal running: everything left has been given
+    # up as unreachable. Longer than its start-up (6 to 8 s) and its pause between goals, shorter
+    # than the 90 s after which it tries given-up places again (frontier_suppression_timeout_s).
+    quiet_limit: 30.0
+    answer_timeout: 5.0       # s a running explorer may leave its state requests unanswered
+    startup_timeout: 15.0     # s a fresh explorer has to answer at all
+    nav_ready_timeout: 60.0   # s for Nav2 and slam_toolbox to be up after the switch to exploring
+    return_timeout: 240.0     # s for the trip back to where it started
+    status_rate: 5.0
+
+frontier_explorer:
+  ros__parameters:
+    # --- topics: as packaged, written out so nothing depends on the package's own file
+    map_topic: /map
+    costmap_topic: /global_costmap/costmap
+    local_costmap_topic: /local_costmap/costmap
+    navigate_to_pose_action_name: navigate_to_pose
+    global_frame: map
+    robot_base_frame: base_link            # changed: the robot has no base_footprint (with it, it never moves)
+    frontier_marker_topic: /explore/frontiers
+    selected_frontier_topic: /explore/selected_frontier
+    optimized_map_topic: /explore/optimized_map
+    completion_event_topic: exploration_complete
+
+    # --- QoS: as packaged (slam_toolbox's map is latched and reliable)
+    map_qos_durability: transient_local
+    map_qos_reliability: reliable
+    map_qos_depth: 1
+    map_qos_autodetect_on_startup: false
+    costmap_qos_reliability: reliable
+    costmap_qos_depth: 10
+
+    # --- control: the program exists only while exploring; the exploration node owns it
+    autostart: true                        # starts at once (the same code as a start request)
+    control_service_enabled: true          # changed: to ask it to stop, and to read its state
+    completion_event_enabled: true         # its "finished" signal
+    return_to_start_on_complete: false     # the exploration node brings the robot back
+    all_frontiers_suppressed_behavior: stay  # changed: the same
+
+    # --- giving up on places it cannot reach: its only no-progress time limit
+    frontier_suppression_enabled: true     # changed: off as packaged
+    frontier_suppression_base_size_m: 0.5  # changed from 1.0: a 1 m square is large next to a 0.8 m doorway
+    frontier_suppression_attempt_threshold: 2
+    frontier_suppression_timeout_s: 90.0
+    frontier_suppression_no_progress_timeout_s: 20.0
+    frontier_suppression_startup_grace_period_s: 15.0
+
+    # --- distances: its own advice is 2.5 times the robot's radius
+    frontier_selection_min_distance: 0.45          # changed from 0.8
+    frontier_candidate_min_goal_distance_m: 0.45   # changed from 0.8
+
+    # --- ordering only: it does not command the robot
+    max_linear_speed_vmax: 0.25            # changed from 0.5: what Nav2 drives at here
+    max_angular_speed_wmax: 1.0
+
+    # --- the next goal is chosen on a fresh map: slam_toolbox publishes every 2 s
+    post_goal_settle_enabled: true         # changed: off as packaged
+    post_goal_min_settle: 2.0              # changed from 1.5
+
+    # as packaged: a frontier cell next to a costmap cell at or above 65 (within 28 cm of an obstacle)
+    # is ignored. Tried 90 (20 cm) on 2026-11-19 to reach the 60 cm strip between the bed and the
+    # south wall: the explorer then aimed into it, Nav2's path follower reported "collision ahead"
+    # about 100 times per exploration and never got in, and exploring took twice as long.
+    occ_threshold: 65
+    # changed from 5: a corner reached only past furniture shows just a few cells of frontier (the
+    # rest of its edge lies within 28 cm of the furniture, which occ_threshold blocks). With 5, the
+    # bedroom's north-east corner, beside the wardrobe, was left unmapped (phase 30, 2026-11-19).
+    min_frontier_size_cells: 3
+    goal_preemption_lidar_range_m: 12.0
+    goal_preemption_lidar_fov_deg: 360.0
+
+    use_sim_time: true

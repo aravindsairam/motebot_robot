@@ -1,0 +1,13 @@
+# Replace the no-go zones of the map in use: /set_no_go_zones, served by the mode manager.
+# The zones are saved with the map (<maps dir>/<map>_zones.yaml); when Nav2 runs it keeps out of
+# them within a second or two, without a mode change. An empty list deletes them all.
+# Refused, with the reason: while mapping or cleaning, during a mode change, when map_name is not
+# the map in use, for more than 50 zones, a zone that is not a real shape (3 to 20 corners, at
+# least 10 cm across, not crossing itself), a missing, too long (over 40) or repeated name, or a
+# new or moved zone that reaches outside the map, covers the robot (or comes within 20 cm of it)
+# or comes within 50 cm of the dock. Zones sent back unchanged are not held to those last three.
+string map_name     # the map the zones belong to: must be the map in use
+NoGoZone[] zones    # the complete new list
+---
+bool success
+string message      # the reason when refused; otherwise what was done

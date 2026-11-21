@@ -1,0 +1,19 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>vacuum_docking</name>
+  <version>0.1.0</version>
+  <description>Docking helpers: turns the AprilTag detector's sighting of the dock into the dock pose the docking server uses.</description>
+  <maintainer email="noreply@example.com">sai</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>rclcpp</depend>
+  <depend>geometry_msgs</depend>
+  <depend>tf2</depend>
+  <depend>tf2_msgs</depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

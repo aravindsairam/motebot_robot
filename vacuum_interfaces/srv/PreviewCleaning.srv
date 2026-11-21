@@ -1,0 +1,8 @@
+# Plan a job without moving the robot or changing its mode: /cleaning/preview. The rows are
+# published on /cleaning/plan (unless a job is running). With what = PLAN this loads a saved plan.
+CleaningJob job
+---
+bool success
+string message                # why not, or a note about the plan
+bool replanned                # a saved plan's rows were planned again because the map has changed
+CleaningEstimate estimate

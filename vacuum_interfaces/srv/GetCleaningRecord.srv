@@ -1,0 +1,8 @@
+# One recorded clean with its picture (the map, the cleaned floor tinted, the path driven):
+# /cleaning/get_record.
+string id
+---
+bool success
+string message
+CleaningRecord record
+uint8[] picture               # PNG

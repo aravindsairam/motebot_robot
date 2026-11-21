@@ -1,0 +1,13 @@
+<?xml version="1.0"?>
+<!-- Minimal model for RViz only: one link shaped like the Create 3 body.
+     Sensor frames come from the simulator on /tf_static, so no joints are defined here. -->
+<robot name="vacuum">
+  <material name="body"><color rgba="0.85 0.85 0.87 1.0"/></material>
+  <link name="base_link">
+    <visual>
+      <origin xyz="0 0 0.0485" rpy="0 0 0"/>
+      <geometry><cylinder radius="0.171" length="0.088"/></geometry>
+      <material name="body"/>
+    </visual>
+  </link>
+</robot>

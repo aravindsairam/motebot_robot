@@ -1,0 +1,62 @@
+# Docking server (opennav_docking): drives the robot onto its charging dock.
+#   1. asks Nav2 to go to the staging pose, 0.85 m in front of the dock
+#   2. waits to see the dock's tag (/detected_dock_pose, from vacuum_docking)
+#   3. steers on the tag until the robot is at the docked position
+docking_server:
+  ros__parameters:
+    controller_frequency: 50.0
+    initial_perception_timeout: 5.0     # s to wait at the staging pose for the first sighting
+    wait_charge_timeout: 5.0
+    dock_approach_timeout: 30.0         # s for the final approach
+    undock_linear_tolerance: 0.05
+    undock_angular_tolerance: 0.1
+    max_retries: 2                      # back out to the staging pose and try again this many times
+    base_frame: "base_link"
+    fixed_frame: "odom"                 # steer in the odometry frame: smooth, and the dock does not move in it
+    dock_backwards: false               # nose first: the camera is at the front
+    dock_prestaging_tolerance: 0.5
+
+    dock_plugins: ["charging_dock"]
+    charging_dock:
+      plugin: "opennav_docking::SimpleChargingDock"
+      # Start the final approach 0.85 m in front (camera 0.95 m from the tag). Further away the
+      # tag's facing direction becomes too uncertain (phase 9 test); from 0.7 m the robot had too
+      # little room to straighten up and ended 3 degrees off when it arrived at an angle.
+      staging_x_offset: -0.85
+      staging_yaw_offset: 0.0
+      use_external_detection_pose: true
+      external_detection_timeout: 1.0   # s without a sighting before the dock counts as lost
+      # /detected_dock_pose sits at the tag, already turned to face into the dock, so no rotation
+      # is needed here. The robot's centre belongs 0.27 m in front of the tag: 10 cm between its
+      # front and the dock tower. The robot stops as soon as it is within docking_threshold of
+      # the target, which is about 1 cm early, so the target is set 1 cm deeper.
+      external_detection_translation_x: -0.26
+      external_detection_translation_y: 0.0
+      external_detection_rotation_roll: 0.0
+      external_detection_rotation_pitch: 0.0
+      external_detection_rotation_yaw: 0.0
+      filter_coef: 0.1
+      docking_threshold: 0.02           # m: "docked" once the robot is this close to the docked position
+      use_battery_status: false         # no battery yet: docked counts as charging
+      use_stall_detection: false
+
+    # Where the dock is on the map: the robot's pose when docked (x, y, heading). The map frame
+    # starts at the robot's start pose, 0.45 m in front of the west wall, facing away from it.
+    docks: ["home_dock"]
+    home_dock:
+      type: "charging_dock"
+      frame: map
+      pose: [-0.119, 0.0, 3.14159]
+
+    controller:
+      # How early the approach lines up with the dock's centre line. Nav2 may hand the robot over
+      # up to 10 cm to one side. With the usual 3.0 and 2.0 the robot was still turning in when
+      # it arrived, and ended up to 4 degrees off; with these it ends within 1 degree.
+      k_phi: 6.0
+      k_delta: 3.0
+      beta: 0.4
+      lambda: 2.0
+      v_linear_min: 0.03                # m/s: creep speed at the end, slow enough to stop within the threshold
+      v_linear_max: 0.15
+      v_angular_max: 0.75
+      slowdown_radius: 0.25

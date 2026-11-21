@@ -1,0 +1,12 @@
+# Start an exploration: /exploration/start, served by the exploration node.
+# Answered at once, BEFORE the robot changes mode. Accepted from idle and docked (a new map is
+# begun) and from mapping (the map being made is continued). Refused, with the reason, when an
+# exploration is running or the robot is doing something else. If the mode manager then refuses
+# a mode, the exploration ends as failed, with its reason in the status.
+# Progress is on /exploration/status. An exploration is stopped by asking for idle (Stop): the
+# robot then stands still in mapping mode with the map kept.
+float32 time_limit            # s of robot time after which it ends early; 0 = the node's default
+---
+bool accepted
+string message                # the reason when refused
+uint32 job_id                 # the accepted exploration's number, as in /exploration/status

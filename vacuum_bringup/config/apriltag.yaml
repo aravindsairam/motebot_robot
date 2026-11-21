@@ -1,0 +1,24 @@
+# AprilTag detector (apriltag_ros): finds the dock's tag in the camera image and publishes where
+# it is, as the transform camera_optical_frame -> dock_tag on /tf and as a list on /detections.
+apriltag:
+  ros__parameters:
+    image_transport: raw
+    family: 36h11
+    size: 0.10                # m, edge of the tag's black square (house_layout.DOCK_TAG_SIZE)
+    max_hamming: 0            # accept only a perfectly read code: no false docks
+    qos_profile: default
+
+    detector:
+      threads: 2
+      decimate: 1.0           # search the full 640x480 image; the tag is only 13 pixels wide at 2.5 m
+      blur: 0.0
+      refine: true
+      sharpening: 0.25
+      debug: false
+
+    pose_estimation_method: "pnp"
+
+    tag:
+      ids: [0]                # the dock (house_layout.DOCK_TAG_ID)
+      frames: [dock_tag]
+      sizes: [0.10]

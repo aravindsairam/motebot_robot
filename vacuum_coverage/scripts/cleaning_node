@@ -1,0 +1,4 @@
+#!/usr/bin/env python3
+from vacuum_coverage.cleaning_node import main
+
+main()

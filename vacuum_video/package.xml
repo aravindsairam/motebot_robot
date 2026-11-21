@@ -1,0 +1,23 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>vacuum_video</name>
+  <version>0.1.0</version>
+  <description>The robot's camera as live video for the Android app, over WebRTC. The phone posts its offer to http://PC:8080/offer; video only, no outside servers. Encodes only while a phone watches.</description>
+  <maintainer email="noreply@example.com">sai</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <buildtool_depend>ament_cmake_python</buildtool_depend>
+
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>python3-numpy</exec_depend>
+  <!-- Also needs, from pip: aiortc (1.14 on this PC, with av 16) and aiohttp (3.13).
+       The node checks them at start-up. -->
+
+  <test_depend>ament_cmake_pytest</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>
