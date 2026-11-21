@@ -1,6 +1,6 @@
-# Motebot robot software
+# MOTEbot robot software
 
-The brain of [Motebot](https://github.com/aravindsairam/motebot), a robot vacuum cleaner built and tested fully in simulation. It runs on ROS 2 Humble and Nav2.
+The brain of [MOTEbot](https://github.com/aravindsairam/motebot), a robot vacuum cleaner built and tested fully in simulation. It runs on ROS 2 Humble and Nav2.
 
 ## What the robot can do
 

@@ -406,7 +406,7 @@ class RobotSide(Node):
         super().__init__("vacuum_gateway")
         self.declare_parameter("host", "0.0.0.0")
         self.declare_parameter("port", 9090)
-        self.declare_parameter("robot_name", "Vacuum")
+        self.declare_parameter("robot_name", "MOTEbot")
         self.declare_parameter("heartbeat_interval", 1.0)
         self.declare_parameter("max_message_bytes", 4 * 1024 * 1024)
         self.declare_parameter("maps_dir", "")  # where the saved maps and their zones files are
