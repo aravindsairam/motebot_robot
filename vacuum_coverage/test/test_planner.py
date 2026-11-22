@@ -513,3 +513,113 @@ def test_a_saved_plan_restarts_from_where_the_robot_is_now():
     assert restarted[0].end == first_row.start
     assert [p for p in restarted if p.kind == ROW] == pieces(plan, ROW)
     check_chain(type(plan)(restarted, plan.planned, plan.left_out, plan.unreachable, plan.estimate), (2.0, 1.5))
+
+
+# ---------------------------------------------------------------- rows at an angle
+@pytest.mark.parametrize("given, angle", [
+    ("auto", None), (" Auto ", None), ("x", 0.0), ("y", 90.0), ("45", 45.0), (45, 45.0), ("37.5", 37.5),
+    ("180", 0.0), ("-30", 150.0), (225.0, 45.0),
+])
+def test_a_row_direction_is_auto_or_an_angle_below_180(given, angle):
+    assert planner.parse_direction(given) == angle
+
+
+@pytest.mark.parametrize("given", ["diagonal", "", "nan", float("inf")])
+def test_a_row_direction_that_is_none_is_refused(given):
+    with pytest.raises(ValueError):
+        planner.parse_direction(given)
+
+
+def test_an_angle_of_0_or_90_is_the_same_plan_as_x_or_y():
+    floor = room(3.0, 2.0)
+    g = grid(floor)
+    block(floor, g, 1.4, 0.9, 1.7, 1.2)
+    for name, angle in (("x", "0"), ("y", "90"), ("x", "180")):
+        assert make_plan(g, (0.6, 0.6), S, Options(direction=name)).pieces == make_plan(g, (0.6, 0.6), S, Options(direction=angle)).pieces
+
+
+def _row_angle(p):
+    return math.degrees(p.heading) % 180.0
+
+
+@pytest.mark.parametrize("angle", [10.0, 30.0, 45.0, 120.0, 135.0, 172.5])
+def test_rows_at_an_angle_run_that_way_and_keep_every_promise_but_the_share(angle):
+    """Slanted rows meet straight walls at their ends, so they leave more floor than rows along the
+    walls: the share promised is lower. Everything else holds as for x and y."""
+    floor = room(3.0, 2.5)
+    g = grid(floor)
+    block(floor, g, 1.5, 1.2, 1.9, 1.6)
+    robot = (0.7, 0.7)
+    plan = make_plan(g, robot, S, Options(direction=str(angle)))
+    rows = pieces(plan, ROW)
+    assert len(rows) >= 6
+    for p in rows:
+        off = abs(_row_angle(p) - angle)
+        assert min(off, 180.0 - off) < 1e-6, f"{p} runs at {_row_angle(p):.2f}°"
+    assert plan.directions == [planner.direction_name(angle)]
+    check_chain(plan, robot)
+    check_clearance(g, plan, (ROW,), S.row_clearance, tolerance=0.0125)  # between two sampled centres: a quarter cell
+    check_planned_floor_is_covered(g, plan, at_least=0.90)
+    check_rows_alternate(plan)
+    check_connectors(g, plan)
+
+
+@pytest.mark.parametrize("angle", [0.0, 30.0, 90.0])
+def test_neighbouring_rows_are_no_farther_apart_than_the_row_spacing(angle):
+    """Closer rows than the cleaning width overlap on purpose: none of them is left out as needless."""
+    g = grid(room(3.0, 2.5))
+    for spacing in (0.25, 0.20, 0.15):
+        plan = make_plan(g, (0.7, 0.7), Settings(row_spacing=spacing), Options(direction=f"{angle:g}"))
+        across = (-math.sin(math.radians(angle)), math.cos(math.radians(angle)))
+        offsets = sorted({round(p.start[0] * across[0] + p.start[1] * across[1], 6) for p in pieces(plan, ROW)})
+        gaps = np.diff(offsets)
+        assert len(gaps) >= 5 and gaps.max() <= spacing + 1e-6, f"rows up to {gaps.max():.3f} m apart at a spacing of {spacing}"
+
+
+def test_closer_rows_mean_more_rows_and_a_longer_clean():
+    g = grid(room(3.0, 2.5))
+    wide = make_plan(g, (0.7, 0.7), Settings(row_spacing=0.30), Options(direction="x"))
+    close = make_plan(g, (0.7, 0.7), Settings(row_spacing=0.10), Options(direction="x"))
+    assert close.estimate.rows > 2 * wide.estimate.rows
+    assert close.estimate.time > 2 * wide.estimate.time
+
+
+def test_a_faster_cleaning_speed_shortens_the_estimate_only():
+    g = grid(room(3.0, 2.5))
+    slow = make_plan(g, (0.7, 0.7), Settings(cleaning_speed=0.10), Options(direction="x"))
+    fast = make_plan(g, (0.7, 0.7), Settings(cleaning_speed=0.30), Options(direction="x"))
+    assert slow.pieces == fast.pieces
+    assert fast.estimate.time < slow.estimate.time
+
+
+def test_the_second_pass_of_slanted_rows_runs_at_right_angles_to_them():
+    g = grid(room(2.5, 2.0))
+    plan = make_plan(g, (1.0, 1.0), S, Options(direction="30", passes=2))
+    first = {round(_row_angle(p), 6) for p in pieces(plan, ROW) if p.pass_number == 1}
+    second = {round(_row_angle(p), 6) for p in pieces(plan, ROW) if p.pass_number == 2}
+    assert first == {30.0} and second == {120.0}
+    assert plan.directions == ["30°", "120°"]
+
+
+def test_edges_follow_the_walls_whatever_the_row_angle():
+    g = grid(room(2.5, 2.0))
+    straight = make_plan(g, (1.0, 1.0), S, Options(direction="x", edges=True))
+    slanted = make_plan(g, (1.0, 1.0), S, Options(direction="45", edges=True))
+    assert pieces(slanted, EDGE)
+    assert {frozenset((p.start, p.end)) for p in pieces(slanted, EDGE)} <= {frozenset((p.start, p.end)) for p in pieces(straight, EDGE)}
+    for p in pieces(slanted, EDGE):
+        assert abs(p.start[0] - p.end[0]) < 1e-9 or abs(p.start[1] - p.end[1]) < 1e-9
+
+
+def test_slanted_rows_on_the_house_map_keep_clear_and_reach_most_of_the_floor():
+    if not HOUSE_YAML:
+        pytest.skip("the saved house map is not here")
+    from vacuum_coverage import mapdata
+    from vacuum_mode_manager import map_files
+    m = mapdata.load(HOUSE_YAML, map_files.read_zones(ZONES_YAML))
+    for angle in ("45", "100"):
+        plan = make_plan(m.grid, (0.0, 0.0), S, Options(direction=angle))
+        check_chain(plan, (0.0, 0.0))
+        check_clearance(m.grid, plan, (ROW,), S.row_clearance, tolerance=0.0125)
+        check_planned_floor_is_covered(m.grid, plan, at_least=0.92)
+        assert make_plan(m.grid, (0.0, 0.0), S, Options(direction=angle)).pieces == plan.pieces  # the same again

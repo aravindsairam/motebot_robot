@@ -145,9 +145,11 @@ def test_good_map_names(name):
     "", "_house", "-house", "my house", "house.yaml", "../house", "été",
     "house_keepout",  # would be the mask of the map 'house'
     "house_zones",    # its .yaml would be the zones of the map 'house'
+    "house_rooms",    # its .yaml would be the rooms of the map 'house'
+    "house_things",   # its .yaml would be the things seen on the map 'house'
 ])
 def test_names_that_are_refused(name):
-    assert "must not end in '_keepout' or '_zones'" in mf.map_name_problem(name)
+    assert "must not end in '_keepout', '_zones', '_rooms' or '_things'" in mf.map_name_problem(name)
 
 
 def test_no_map_name_can_reach_another_maps_files():

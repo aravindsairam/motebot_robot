@@ -28,11 +28,17 @@ Interfaces (types in vacuum_interfaces):
     /cleaning/save_plan, /cleaning/list_plans, /cleaning/delete_plan
     /cleaning/history       srv ListCleaningHistory      records newest first, and the totals
     /cleaning/get_record    srv GetCleaningRecord        one record with its picture
+    /cleaning/room_report   srv RoomReport               how clean each room is (from the records)
+
+It follows /robot_settings (the settings a user may change from the app): the cleaning speed (sent to
+the row controller at once, also during a clean), the row spacing, and the row direction a job uses
+when it does not name one. Until they arrive it uses coverage.yaml's values, which are the same.
 
 Written in Python: it orchestrates (goals, files, a 10 Hz position reading), nothing time-critical.
 Timers run on the computer's steady clock, so they keep running if the simulator freezes.
 """
 
+import dataclasses
 import math
 import os
 import threading
@@ -56,21 +62,24 @@ from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from rclpy.time import Time
+from rcl_interfaces.msg import Parameter, ParameterType, ParameterValue
+from rcl_interfaces.srv import SetParameters
 from std_srvs.srv import Trigger
 from tf2_ros import Buffer, TransformException, TransformListener
 from visualization_msgs.msg import Marker, MarkerArray
 
 from vacuum_interfaces.msg import (CleaningEstimate, CleaningJob, CleaningPiece, CleaningPlan, CleaningPlanInfo,
-                                   CleaningRecord, CleaningStatus, CleaningTotals, RobotState, SafetyStatus)
+                                   CleaningRecord, CleaningStatus, CleaningTotals, RobotSettings, RobotState, RoomCleaning,
+                                   SafetyStatus)
 from vacuum_interfaces.srv import (ChangeState, DeleteCleaningPlan, GetCleaningRecord, ListCleaningHistory,
-                                   ListCleaningPlans, PreviewCleaning, SaveCleaningPlan, StartCleaning)
-from vacuum_mode_manager import map_files
+                                   ListCleaningPlans, PreviewCleaning, RoomReport, SaveCleaningPlan, StartCleaning)
+from vacuum_mode_manager import map_files, robot_settings
 
 from . import job as jobs
-from . import mapdata, picture, planner
+from . import mapdata, picture, planner, room_report, rooms
 from .coverage import Recorder
 from .grid import polygon_mask
-from .jobspec import AREA, EVERYTHING, PLAN, SPOT, JobSpec
+from .jobspec import AREA, EVERYTHING, PLAN, ROOM, SPOT, JobSpec
 from .planner import CONNECTOR, EDGE, ROW, TRANSIT, Piece, Plan, PlanError, Settings
 from .store import CleaningStore, StoreError
 
@@ -82,7 +91,8 @@ FOREIGN_GOAL_GRACE = 1.0  # s before an unknown goal counts as someone else's (o
 # Modes a job can start from. Not mapping (leaving it loses an unsaved map), not failsafe.
 _START_MODES = ("idle", "docked", "manual", "navigation", "docking")
 _KINDS = {ROW: CleaningPiece.ROW, CONNECTOR: CleaningPiece.CONNECTOR, TRANSIT: CleaningPiece.TRANSIT, EDGE: CleaningPiece.EDGE}
-_WHAT = {CleaningJob.EVERYTHING: EVERYTHING, CleaningJob.AREA: AREA, CleaningJob.SPOT: SPOT, CleaningJob.PLAN: PLAN}
+_WHAT = {CleaningJob.EVERYTHING: EVERYTHING, CleaningJob.AREA: AREA, CleaningJob.SPOT: SPOT, CleaningJob.PLAN: PLAN,
+         CleaningJob.ROOM: ROOM}
 _WHAT_BACK = {v: k for k, v in _WHAT.items()}
 _ACTIVE_GOAL = (GoalStatus.STATUS_ACCEPTED, GoalStatus.STATUS_EXECUTING)
 _SETTINGS_FIELDS = [f for f in Settings.__dataclass_fields__]
@@ -173,6 +183,7 @@ class CleaningNode(Node):
         self._cleaned_sent = 0.0
         self._preview: Optional[CleaningPlan] = None
         self._map_cache: Tuple[str, tuple, Optional[mapdata.MapData]] = ("", (), None)
+        self._row_direction = "auto"  # a job that names no direction gets this (from /robot_settings)
 
         # --- ROS plumbing
         latched = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL)
@@ -190,6 +201,9 @@ class CleaningNode(Node):
         status_qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL)
         self.create_subscription(GoalStatusArray, "navigate_to_pose/_action/status", self._on_nav_status, status_qos, callback_group=data)
         self.create_subscription(OccupancyGrid, "map", self._on_map, latched, callback_group=data)
+        self.create_subscription(RobotSettings, "robot_settings", self._on_settings, latched, callback_group=data)
+        self._set_controller_params = self.create_client(SetParameters, "controller_server/set_parameters",
+                                                         callback_group=self._client_group)
         # Not latched: only a costmap published since cleaning mode was entered says Nav2 is up.
         self.create_subscription(OccupancyGrid, "local_costmap/costmap", self._on_costmap, 1, callback_group=data)
         self._cancel_nav = self.create_client(CancelGoal, "navigate_to_pose/_action/cancel_goal", callback_group=self._client_group)
@@ -211,6 +225,8 @@ class CleaningNode(Node):
         self.create_service(DeleteCleaningPlan, "cleaning/delete_plan", self._on_delete_plan, callback_group=services)
         self.create_service(ListCleaningHistory, "cleaning/history", self._on_history, callback_group=services)
         self.create_service(GetCleaningRecord, "cleaning/get_record", self._on_get_record, callback_group=services)
+        self.create_service(RoomReport, "cleaning/room_report", self._on_room_report, callback_group=services)
+        self._reachable_cache = ("", None)  # (map checksum, the floor the robot can clean on it)
 
         steady = Clock(clock_type=ClockType.STEADY_TIME)
         self.create_timer(1.0 / float(self.param("status_rate")), self._publish_status, callback_group=MutuallyExclusiveCallbackGroup(), clock=steady)
@@ -235,6 +251,52 @@ class CleaningNode(Node):
             # change seen after cleaning mode was seen ends the job. While it is ending, the change is ours.
             if job.seen_in_mode and msg.state != CLEANING_MODE and job.state != CleaningStatus.ENDING:
                 self._stop_job(job, f"the robot left cleaning mode (now {msg.state})")
+
+    def _on_settings(self, msg: RobotSettings) -> None:
+        wanted = robot_settings.tidy(robot_settings.RobotSettings(
+            cleaning_speed=msg.cleaning_speed, manual_speed=msg.manual_speed, row_spacing=msg.row_spacing,
+            row_angle_auto=msg.row_angle_auto, row_angle=msg.row_angle))
+        why = robot_settings.check(wanted)
+        if why:  # the settings node checks them; this is only in case another publisher appears
+            self.get_logger().error(f"settings on /robot_settings ignored: {why}")
+            return
+        old = self._settings
+        self._settings = dataclasses.replace(old, cleaning_speed=wanted.cleaning_speed, row_spacing=wanted.row_spacing)
+        self._row_direction = wanted.row_direction
+        self.get_logger().info(f"settings: cleaning {wanted.cleaning_speed:.2f} m/s, rows {wanted.row_spacing * 100:.0f} cm apart, "
+                               f"row direction {wanted.row_direction}")
+        with self._lock:
+            job = self._job
+            driving = job is not None and job.runner is not None
+        if driving and abs(old.cleaning_speed - wanted.cleaning_speed) > 1e-6:
+            self._send_cleaning_speed(wait=False)
+
+    def _send_cleaning_speed(self, wait: bool) -> bool:
+        """Tell the row controller the cleaning speed. Nav2 keeps a value set at run time while it
+        runs; it is sent again at the start of every job, so a restarted Nav2 gets it too."""
+        speed = self._settings.cleaning_speed
+        name = f"{self.param('row_controller')}.desired_linear_vel"
+        request = SetParameters.Request(parameters=[Parameter(
+            name=name, value=ParameterValue(type=ParameterType.PARAMETER_DOUBLE, double_value=float(speed)))])
+        if not self._set_controller_params.wait_for_service(timeout_sec=2.0 if wait else 0.0):
+            self.get_logger().error("could not set the cleaning speed: controller_server's parameters do not answer")
+            return False
+        future = self._set_controller_params.call_async(request)
+        done = threading.Event()
+
+        def finished(f):
+            result = f.result()
+            if result is None or not result.results or not result.results[0].successful:
+                reason = result.results[0].reason if result is not None and result.results else "no answer"
+                self.get_logger().error(f"controller_server refused {name} = {speed:.2f}: {reason}")
+            else:
+                self.get_logger().info(f"cleaning speed {speed:.2f} m/s sent to the row controller")
+            done.set()
+
+        future.add_done_callback(finished)
+        if not wait:
+            return True
+        return done.wait(5.0) and future.result() is not None and bool(future.result().results) and future.result().results[0].successful
 
     def _on_map(self, msg: OccupancyGrid) -> None:
         i = msg.info
@@ -343,10 +405,11 @@ class CleaningNode(Node):
             area=area,
             spot=(float(msg.spot_x), float(msg.spot_y)) if what == SPOT else None,
             plan_name=msg.plan_name.strip() if what == PLAN else "",
-            direction=(msg.direction.strip().lower() or "auto"),
+            direction=(msg.direction.strip().lower() or self._row_direction),
             passes=int(msg.passes) or 1,
             edges=edges,
             return_to_dock=msg.return_to_dock != CleaningJob.OPTION_OFF,
+            room=" ".join(msg.room.split()) if what == ROOM else "",
         )
 
     @staticmethod
@@ -361,6 +424,7 @@ class CleaningNode(Node):
         msg.passes = spec.passes
         msg.edges = CleaningJob.OPTION_DEFAULT if spec.edges is None else (CleaningJob.OPTION_ON if spec.edges else CleaningJob.OPTION_OFF)
         msg.return_to_dock = CleaningJob.OPTION_ON if spec.return_to_dock else CleaningJob.OPTION_OFF
+        msg.room = spec.room
         return msg
 
     def _make_plan(self, spec: JobSpec, m: mapdata.MapData, robot: Tuple[float, float]) -> Tuple[JobSpec, Plan, str]:
@@ -370,6 +434,8 @@ class CleaningNode(Node):
         if why:
             raise PlanError(why)
         note = ""
+        if spec.what == ROOM:
+            spec = self._with_room(spec, m)
         if spec.what == PLAN:
             store = self._store(m.name)
             saved = store.load_plan(spec.plan_name)
@@ -386,6 +452,22 @@ class CleaningNode(Node):
         plan = planner.make_plan(m.grid, robot, self._settings, spec.options(bool(self.param("edges_by_default"))),
                                  spec.area_polygon(self._settings.spot_size))
         return spec, plan, note
+
+    def _rooms_of(self, m: mapdata.MapData) -> List[rooms.Room]:
+        try:
+            return rooms.read(map_files.rooms_path(self._maps_dir, m.name))
+        except Exception as exc:
+            raise PlanError(f"the rooms of this map cannot be read: {exc}") from exc
+
+    def _with_room(self, spec: JobSpec, m: mapdata.MapData) -> JobSpec:
+        """A room clean: the room's outline as its area, and its name as saved."""
+        found = self._rooms_of(m)
+        room = rooms.by_name(found, spec.room)
+        if room is None:
+            if not found:
+                raise PlanError("this map has no rooms yet: find them first (Rooms on the map)")
+            raise PlanError(f"there is no room called '{spec.room}'; the rooms are {', '.join(r.name for r in found)}")
+        return dataclasses.replace(spec, room=room.name, area=list(room.outline))
 
     def _plan_from_pieces(self, m: mapdata.MapData, pieces: List[Piece], spec: JobSpec) -> Plan:
         """A saved plan's rows, as they were saved; its planned floor worked out again as a fresh plan's
@@ -526,6 +608,9 @@ class CleaningNode(Node):
         if not self._wait_for_nav2(job):
             stopped = self._stopped(job)
             return (jobs.STOPPED, stopped) if stopped else (jobs.FAILED, "navigation did not start in cleaning mode")
+        sent_speed = self._settings.cleaning_speed
+        if not self._send_cleaning_speed(wait=True):
+            return jobs.FAILED, "could not set the cleaning speed on the row controller"
         # A trip left over from navigation mode (or anyone's goal) would fight the first row.
         self._cancel_strangers(job, grace=0.0)
         log.info(f"job {job.id} ({job.spec.target}): {job.plan.estimate.rows} rows, {job.plan.estimate.distance:.0f} m, "
@@ -541,6 +626,10 @@ class CleaningNode(Node):
             job.reached_cleaning = True
             if not job.runner.paused:  # a pause may already have come in
                 job.state = CleaningStatus.CLEANING
+        # A new speed that came while the job had no runner yet was not sent by _on_settings; from
+        # here on it is.
+        if abs(self._settings.cleaning_speed - sent_speed) > 1e-6:
+            self._send_cleaning_speed(wait=False)
         self._publish_status()
         return job.runner.run()
 
@@ -663,7 +752,7 @@ class CleaningNode(Node):
             }
             png = picture.record_picture(job.map, job.recorder.cleaned, job.recorder.path)
             store = self._store(job.map.name)
-            rid = store.add_record(record, png)
+            rid = store.add_record(record, png, cleaned=job.recorder.cleaned)
             self._report_store_problems(store)
             self.get_logger().info(f"recorded clean {rid}")
         except Exception as exc:
@@ -797,6 +886,43 @@ class CleaningNode(Node):
         t = store.totals()
         response.totals = CleaningTotals(cleans=int(t["cleans"]), area=float(t["area"]), time=float(t["time"]), distance=float(t["distance"]))
         self._report_store_problems(store)
+        return response
+
+    def _reachable(self, m: mapdata.MapData) -> Optional[np.ndarray]:
+        """The floor the robot can clean on this map, from where it is (or the dock); cached per map."""
+        if self._reachable_cache[0] == m.checksum:
+            return self._reachable_cache[1]
+        try:
+            robot, _ = self._robot_xy_or_dock()
+            plan = planner.make_plan(m.grid, robot, self._settings, planner.Options(direction="x"))
+            reachable = plan.reachable
+        except Exception as exc:
+            self.get_logger().warn(f"room report: the cleanable floor could not be worked out ({exc}); using all the floor")
+            reachable = None
+        self._reachable_cache = (m.checksum, reachable)
+        return reachable
+
+    def _on_room_report(self, _request, response):
+        try:
+            m = self._load_map()
+            found = self._rooms_of(m)
+            if not found:
+                response.success, response.message = False, "this map has no rooms yet: find them first (Rooms on the map)"
+                return response
+            store = self._store(m.name)
+            entries = room_report.report(found, m.grid, self._reachable(m), store.history(), store.cleaned, time.time())
+            self._report_store_problems(store)
+        except (PlanError, StoreError) as exc:
+            response.success, response.message = False, str(exc)
+            return response
+        except Exception as exc:
+            self.get_logger().error(f"room report failed: {exc!r}\n{traceback.format_exc()}")
+            response.success, response.message = False, f"the room report failed: {exc}"
+            return response
+        response.success = True
+        response.rooms = [RoomCleaning(name=e["name"], floor_area=float(e["floor_area"]), last_cleaned=float(e["last_cleaned"]),
+                                       last_share=float(e["last_share"]), last_touched=float(e["last_touched"]),
+                                       cleans_last_week=int(e["cleans_last_week"])) for e in entries]
         return response
 
     def _on_get_record(self, request, response):
@@ -1000,7 +1126,9 @@ class _RosDriver:
         goal.controller_id = self.node.param("row_controller")
         goal.goal_checker_id = self.node.param("row_goal_checker")
         length = math.dist(start, end)
-        timeout = length / (self.node._settings.cleaning_speed / 2.0) + float(self.node.param("piece_timeout_margin"))
+        # At the slowest cleaning speed allowed: the speed may be lowered while the row is driven.
+        slowest = min(self.node._settings.cleaning_speed, robot_settings.CLEANING_SPEED_MIN)
+        timeout = length / (slowest / 2.0) + float(self.node.param("piece_timeout_margin"))
         self.job.sweeping = True  # only the controller server's straight pieces clean
         try:
             return self._run(self.node._follow, goal, abort, timeout, watch_reflex=True)

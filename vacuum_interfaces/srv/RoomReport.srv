@@ -1,0 +1,6 @@
+# How clean each room of the map in use is, from the cleaning records: /cleaning/room_report, served
+# by the cleaning node. Records made before the robot kept the cleaned floor of each clean are not counted.
+---
+bool success
+string message        # why not, when there are no rooms or no map
+RoomCleaning[] rooms

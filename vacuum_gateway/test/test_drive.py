@@ -29,3 +29,10 @@ def test_speeds_are_kept_within_the_base_limits():
     assert drive.clamp_speeds(-5.0, 9.0) == (-drive.MAX_FORWARD, drive.MAX_TURN)
     assert drive.clamp_speeds(math.nan, 0.0) is None
     assert drive.clamp_speeds(0.0, math.inf) is None
+
+
+def test_the_joystick_speed_setting_holds_the_speeds_but_never_above_the_base():
+    assert drive.clamp_speeds(0.3, -1.5, 0.15, 0.6) == (0.15, -0.6)
+    assert drive.clamp_speeds(-0.3, 0.2, 0.15, 0.6) == (-0.15, 0.2)
+    assert drive.clamp_speeds(0.1, 0.0, 0.15, 0.6) == (0.1, 0.0)
+    assert drive.clamp_speeds(5.0, 9.0, 1.0, 9.0) == (drive.MAX_FORWARD, drive.MAX_TURN)

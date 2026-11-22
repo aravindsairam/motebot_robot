@@ -7,9 +7,12 @@
     ros2 run vacuum_mode_manager zones             list the no-go zones of the map in use
     ros2 run vacuum_mode_manager zones add NAME X0 Y0 X1 Y1    add a rectangle (two opposite corners, map metres)
     ros2 run vacuum_mode_manager zones delete NAME             delete a zone
+    ros2 run vacuum_mode_manager settings          show the settings (speeds, row spacing, row direction)
+    ros2 run vacuum_mode_manager settings cleaning_speed=0.25 row_angle=45    change some of them
 """
 
 import argparse
+import dataclasses
 import sys
 
 import rclpy
@@ -19,15 +22,16 @@ from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 
 from vacuum_interfaces.msg import NoGoZone, RobotState
-from vacuum_interfaces.srv import ChangeState, SaveMap, SetNoGoZones
+from vacuum_interfaces.msg import RobotSettings as RobotSettingsMsg
+from vacuum_interfaces.srv import ChangeState, SaveMap, SetNoGoZones, SetRobotSettings
 
-from . import map_files, zone_rules
+from . import map_files, robot_settings, zone_rules
 
 
 def _call(node, service_type, name, request, timeout):
     client = node.create_client(service_type, name)
     if not client.wait_for_service(timeout_sec=5.0):
-        print(f"The mode manager is not running (no {name} service).")
+        print(f"No {name} service: is the robot stack running?")
         return None
     future = client.call_async(request)
     rclpy.spin_until_future_complete(node, future, timeout_sec=timeout)
@@ -182,3 +186,62 @@ def _zones(node, args) -> int:
 def _zone_msg(zone: dict) -> NoGoZone:
     points = [Point32(x=float(x), y=float(y), z=0.0) for x, y in zone["polygon"]]
     return NoGoZone(name=str(zone["name"]), polygon=Polygon(points=points))
+
+
+def settings_main():
+    parser = argparse.ArgumentParser(prog="settings", description="The settings a user may change from the app.")
+    parser.add_argument("changes", nargs="*", metavar="NAME=VALUE",
+                        help="cleaning_speed, manual_speed (m/s), row_spacing (m), row_angle (degrees, or auto)")
+    args = parser.parse_args()
+    rclpy.init()
+    node = Node("settings_cli")
+    try:
+        sys.exit(_settings(node, args.changes))
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
+
+
+def _settings(node, changes) -> int:
+    latched = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL)
+    got = []
+    node.create_subscription(RobotSettingsMsg, "robot_settings", got.append, latched)
+    for _ in range(50):
+        if got:
+            break
+        rclpy.spin_once(node, timeout_sec=0.1)
+    if not got:
+        print("The settings node is not running (nothing on /robot_settings).")
+        return 1
+    current = robot_settings.tidy(robot_settings.RobotSettings(
+        cleaning_speed=got[-1].cleaning_speed, manual_speed=got[-1].manual_speed, row_spacing=got[-1].row_spacing,
+        row_angle_auto=got[-1].row_angle_auto, row_angle=got[-1].row_angle))
+    if not changes:
+        print(robot_settings.describe(current))
+        return 0
+    values = {}
+    for change in changes:
+        name, _, value = change.partition("=")
+        if name == "row_angle" and value.strip().lower() == "auto":
+            values["row_angle_auto"] = True
+            continue
+        if name not in ("cleaning_speed", "manual_speed", "row_spacing", "row_angle") or not value:
+            print(f"cannot read '{change}': use cleaning_speed=, manual_speed=, row_spacing= or row_angle= (a number, or auto)")
+            return 2
+        try:
+            values[name] = float(value)
+        except ValueError:
+            print(f"'{value}' is not a number")
+            return 2
+        if name == "row_angle":
+            values["row_angle_auto"] = False
+    wanted = dataclasses.replace(current, **values)
+    request = SetRobotSettings.Request()
+    request.settings = RobotSettingsMsg(cleaning_speed=wanted.cleaning_speed, manual_speed=wanted.manual_speed,
+                                        row_spacing=wanted.row_spacing, row_angle_auto=wanted.row_angle_auto,
+                                        row_angle=wanted.row_angle)
+    response = _call(node, SetRobotSettings, "set_robot_settings", request, 10.0)
+    if response is None:
+        return 1
+    print(response.message)
+    return 0 if response.success else 1

@@ -4,6 +4,8 @@ Everything belongs to one map and lives in a folder next to it:
 
     <maps>/<map>_cleaning/plans/<name>.yaml         a saved plan (the name is %-encoded in the file name)
     <maps>/<map>_cleaning/records/<id>.yaml + .png  one clean: its numbers, and its picture
+    <maps>/<map>_cleaning/records/<id>_cleaned.png  the floor it cleaned: one bit per map cell (row 0 at the top
+                                                    of the image is the map's row 0); older records have none
     <maps>/<map>_cleaning/totals.yaml               sums over every clean ever recorded
 
 Only the cleaning node writes here. Every file is written whole or not at all: to a hidden
@@ -22,6 +24,7 @@ import urllib.parse
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Sequence, Tuple
 
+import numpy as np
 import yaml
 
 from .planner import Piece
@@ -61,6 +64,16 @@ def _write_atomic(path: str, data: bytes) -> None:
         if os.path.exists(tmp):
             os.unlink(tmp)
         raise
+
+
+def _mask_png(mask: np.ndarray) -> bytes:
+    import io
+
+    from PIL import Image
+
+    out = io.BytesIO()
+    Image.fromarray(np.asarray(mask, dtype=bool)).save(out, format="PNG", optimize=True)
+    return out.getvalue()
 
 
 def _dump(data) -> bytes:
@@ -149,8 +162,9 @@ class CleaningStore:
         return True
 
     # ------------------------------------------------------------------ records
-    def add_record(self, record: dict, picture_png: bytes) -> str:
-        """Keep one clean's record and picture; update the totals; drop the oldest beyond history_size."""
+    def add_record(self, record: dict, picture_png: bytes, cleaned: Optional[np.ndarray] = None) -> str:
+        """Keep one clean's record, picture and cleaned floor (bool per map cell); update the totals;
+        drop the oldest beyond history_size."""
         stamp = time.strftime("%Y%m%d-%H%M%S", time.localtime(float(record.get("started", time.time()))))
         rid = f"{stamp}-{int(record.get('job_id', 0))}"
         n = 0
@@ -161,6 +175,8 @@ class CleaningStore:
         totals = self.totals()  # before this record exists: a rebuild must not count it twice
         # The picture first: a record that exists always has its picture.
         _write_atomic(os.path.join(self.records_dir, rid + ".png"), picture_png)
+        if cleaned is not None:
+            _write_atomic(os.path.join(self.records_dir, rid + "_cleaned.png"), _mask_png(cleaned))
         _write_atomic(os.path.join(self.records_dir, rid + ".yaml"), _dump(record))
         status = record.get("status", {})
         totals["cleans"] += 1
@@ -183,7 +199,7 @@ class CleaningStore:
     def _prune(self) -> None:
         ids = self._record_ids()
         for rid in ids[: max(len(ids) - self.history_size, 0)]:
-            for ext in (".yaml", ".png"):
+            for ext in (".yaml", ".png", "_cleaned.png"):
                 path = os.path.join(self.records_dir, rid + ext)
                 if os.path.exists(path):
                     os.unlink(path)
@@ -226,6 +242,22 @@ class CleaningStore:
         except OSError:
             picture = b""
         return record, picture
+
+    def cleaned(self, rid: str) -> Optional[np.ndarray]:
+        """The floor a clean cleaned (bool per map cell), or None if the record has none."""
+        if not _ID.match(rid or ""):
+            return None
+        path = os.path.join(self.records_dir, rid + "_cleaned.png")
+        if not os.path.isfile(path):
+            return None
+        try:
+            from PIL import Image
+
+            with Image.open(path) as image:
+                return np.asarray(image.convert("1"), dtype=bool).copy()
+        except Exception as exc:
+            self.problems.append(f"skipped the cleaned floor of record {rid}: {exc}")
+            return None
 
     def totals(self) -> Dict[str, float]:
         try:

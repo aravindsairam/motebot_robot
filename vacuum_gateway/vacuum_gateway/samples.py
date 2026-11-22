@@ -100,6 +100,20 @@ def build() -> Dict[str, bytes]:
                                 saved=1794988000.25)
     record = SimpleNamespace(id="20261118-101500-7", started=1794988290.5, ended=1794989130.75, status=finished)
     totals = SimpleNamespace(cleans=23, area=412.5, time=18600.0, distance=1520.25)
+    # Values a 32-bit float holds exactly, so both ends read back the same numbers.
+    settings = SimpleNamespace(
+        cleaning_speed=0.25, manual_speed=0.125, row_spacing=0.25, row_angle_auto=False, row_angle=37.5,
+        CLEANING_SPEED_MIN=0.125, CLEANING_SPEED_MAX=0.3125, MANUAL_SPEED_MIN=0.0625, MANUAL_SPEED_MAX=0.375,
+        ROW_SPACING_MIN=0.125, ROW_SPACING_MAX=0.5, ROW_SPACING_STEP=0.0625, MANUAL_TURN_PER_SPEED=4.0)
+    def poly(*pts):
+        return SimpleNamespace(points=[SimpleNamespace(x=x, y=y, z=0.0) for x, y in pts])
+
+    room_list = [
+        SimpleNamespace(name="Kitchen", outline=poly((6.5, 0.0), (10.6, 0.0), (10.6, 3.2), (6.5, 3.2)), x=8.55, y=1.6, area=12.75),
+        SimpleNamespace(name="Bedroom é", outline=poly((0.0, 4.1), (3.9, 4.1), (3.9, 7.6)), x=-1.25, y=5.5, area=6.5),
+    ]
+    answer = SimpleNamespace(reply="I'm in the kitchen. I can see a table and two stools.", tools_used=["go_to_room", "look"],
+                             picture_jpeg=bytes([0xFF, 0xD8, 0xFF, 0xD9]), mark=[8.55, -1.25])
     spot = pb.CleaningJob(what=pb.CleaningJob.WHAT_SPOT, spot_x=2.5, spot_y=-1.25, return_to_dock=pb.CleaningJob.OPTION_OFF)
     return {
         "cleaning_status.bin": _frame(pb.DATA_CLEANING_STATUS, convert.cleaning_status(status)),
@@ -158,6 +172,15 @@ def build() -> Dict[str, bytes]:
         "no_go_zones.bin": _frame(pb.DATA_NO_GO_ZONES, convert.no_go_zones(
             [("stairwell", [(4.55, 2.0), (5.65, 2.0), (5.65, 3.3), (4.55, 3.3)]), ("rug é", [(-1.0, -0.5), (0.0, 0.0), (-0.5, 1.0)])],
             "house")),
+        "robot_settings.bin": _frame(pb.DATA_ROBOT_SETTINGS, convert.robot_settings(settings)),
+        "reply_settings_refused.bin": _frame(pb.DATA_REPLY, convert.reply(
+            73, pb.Reply.RESULT_REFUSED, "the cleaning speed must be between 0.10 and 0.30 m/s (asked for 0.50)")),
+        "rooms.bin": _frame(pb.DATA_ROOMS, convert.rooms(room_list, "home")),
+        "assistant_status.bin": _frame(pb.DATA_ASSISTANT_STATUS, convert.assistant_status(
+            SimpleNamespace(busy=True, conversation="phone-1a2b", doing="going to the kitchen"))),
+        "reply_answer.bin": _frame(pb.DATA_REPLY, convert.reply(74, pb.Reply.RESULT_OK, "", answer=convert.assistant_answer(answer))),
+        "reply_rooms.bin": _frame(pb.DATA_REPLY, convert.reply(75, pb.Reply.RESULT_OK, "found 2 rooms",
+                                                                 rooms=convert.rooms(room_list, "home"))),
         # Commands, as the app must write them.
         "command_change_mode.bin": _frame(pb.COMMAND_CHANGE_MODE, pb.ChangeMode(request_id=42, mode="docking"), pb.CHANNEL_COMMAND),
         "command_ping.bin": _frame(pb.COMMAND_PING, pb.Ping(request_id=4000000000), pb.CHANNEL_COMMAND),
@@ -168,6 +191,18 @@ def build() -> Dict[str, bytes]:
         "command_set_no_go_zones.bin": _frame(pb.COMMAND_SET_NO_GO_ZONES, pb.SetNoGoZones(request_id=68, map_name="house", zones=[
             pb.NoGoZones.Zone(name="stairwell", points_cm=[455, 200, 565, 200, 565, 330, 455, 330]),
             pb.NoGoZones.Zone(name="rug é", points_cm=[-100, -50, 0, 0, -50, 100])]), pb.CHANNEL_COMMAND),
+        "command_find_rooms.bin": _frame(pb.COMMAND_FIND_ROOMS, pb.FindRooms(request_id=76), pb.CHANNEL_COMMAND),
+        "command_set_rooms.bin": _frame(pb.COMMAND_SET_ROOMS, pb.SetRooms(
+            request_id=77, map_name="home", rooms=convert.rooms(room_list, "home").rooms), pb.CHANNEL_COMMAND),
+        "command_ask_assistant.bin": _frame(pb.COMMAND_ASK_ASSISTANT, pb.AskAssistant(
+            request_id=78, conversation="phone-1a2b", text="Clean the kitchen, please é"), pb.CHANNEL_COMMAND),
+        "command_name_rooms.bin": _frame(pb.COMMAND_NAME_ROOMS, pb.NameRooms(
+            request_id=79, rooms=convert.rooms(room_list, "home").rooms), pb.CHANNEL_COMMAND),
+        "command_start_cleaning_room.bin": _frame(pb.COMMAND_START_CLEANING, pb.StartCleaning(
+            request_id=80, job=pb.CleaningJob(what=pb.CleaningJob.WHAT_ROOM, room="Kitchen")), pb.CHANNEL_COMMAND),
+        "command_set_robot_settings.bin": _frame(pb.COMMAND_SET_ROBOT_SETTINGS, pb.SetRobotSettings(
+            request_id=72, settings=pb.RobotSettings(cleaning_speed=0.25, manual_speed=0.125, row_spacing=0.25,
+                                                     row_angle_auto=False, row_angle=37.5)), pb.CHANNEL_COMMAND),
     }
 
 

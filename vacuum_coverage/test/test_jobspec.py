@@ -41,6 +41,12 @@ def test_bad_jobs_are_refused_with_a_reason(job, words):
     assert why is not None and words in why
 
 
+def test_rows_may_be_asked_for_at_an_angle():
+    assert JobSpec(direction="45").check() is None
+    assert JobSpec(direction="37.5").options(edges_by_default=False).direction == "37.5"
+    assert JobSpec.from_dict(JobSpec(direction="120").to_dict()).direction == "120"
+
+
 def test_a_job_survives_a_round_trip_through_plain_data():
     job = JobSpec(what=AREA, area=[(0.5, 0.5), (2.0, 0.5), (2.0, 1.5)], direction="y", passes=2, edges=True, return_to_dock=False)
     assert JobSpec.from_dict(job.to_dict()) == job
@@ -56,3 +62,13 @@ def test_a_saved_plan_runs_with_its_own_area_and_options_and_the_callers_docking
     assert run.what == SPOT and run.spot == (1.0, 2.0) and run.passes == 2 and run.edges is True
     assert run.plan_name == "Hall" and run.return_to_dock is False
     assert run.target == "Hall"
+
+
+def test_a_room_job_names_the_room_and_takes_its_outline_once_looked_up():
+    from vacuum_coverage.jobspec import ROOM
+    job = JobSpec(what=ROOM, room="Kitchen")
+    assert job.check() is None and job.target == "Kitchen" and job.area_polygon(1.5) is None
+    assert "no room name" in JobSpec(what=ROOM, room=" ").check()
+    looked_up = JobSpec(what=ROOM, room="Kitchen", area=[(0.0, 0.0), (2.0, 0.0), (2.0, 2.0)])
+    assert looked_up.area_polygon(1.5) == [(0.0, 0.0), (2.0, 0.0), (2.0, 2.0)]
+    assert JobSpec.from_dict(looked_up.to_dict()) == looked_up

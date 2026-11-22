@@ -9,7 +9,7 @@ find_package(ament_cmake_python REQUIRED)
 ament_python_install_package(${PROJECT_NAME})
 install(PROGRAMS
   scripts/cleaning_node scripts/clean scripts/preview scripts/pause scripts/resume
-  scripts/plans scripts/history scripts/plan_picture
+  scripts/plans scripts/history scripts/plan_picture scripts/rooms_node
   DESTINATION lib/${PROJECT_NAME})
 
 if(BUILD_TESTING)

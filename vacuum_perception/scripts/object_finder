@@ -1,0 +1,4 @@
+#!/usr/bin/env python3
+from vacuum_perception.finder_node import main
+
+main()

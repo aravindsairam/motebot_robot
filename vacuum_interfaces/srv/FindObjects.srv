@@ -1,0 +1,9 @@
+# Look for things in what the camera sees now: /perception/find, served by the object finder.
+# The first call loads the finder (a few seconds). Answered in about a second after that.
+string[] names        # what to look for, in plain words ("sofa", "red chair")
+float32 min_score     # 0: the finder's own default
+---
+bool success
+string message
+Detection[] detections        # best first
+uint8[] picture_jpeg          # the picture looked at, with the finds marked

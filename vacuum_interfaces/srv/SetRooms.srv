@@ -1,0 +1,8 @@
+# Replace the rooms of the map in use: /rooms/set, served by the rooms node. They are saved with the
+# map and published on /rooms. Refused, with the reason, when map_name is not the map in use, a
+# name is missing, too long (over 40) or repeated, or an outline has fewer than 3 corners.
+string map_name
+Room[] rooms      # the complete new list; empty deletes them all
+---
+bool success
+string message

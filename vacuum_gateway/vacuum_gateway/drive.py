@@ -17,11 +17,13 @@ MAX_FORWARD = 0.306  # m/s
 MAX_TURN = 1.9  # rad/s
 
 
-def clamp_speeds(forward: float, turn: float) -> Optional[Tuple[float, float]]:
-    """The speeds within the base's limits, or None when they are not numbers."""
+def clamp_speeds(forward: float, turn: float, max_forward: float = MAX_FORWARD, max_turn: float = MAX_TURN) -> Optional[Tuple[float, float]]:
+    """The speeds within the limits (the user's joystick speed, never above the base's), or None
+    when they are not numbers."""
     if not (math.isfinite(forward) and math.isfinite(turn)):
         return None
-    return max(-MAX_FORWARD, min(MAX_FORWARD, forward)), max(-MAX_TURN, min(MAX_TURN, turn))
+    max_forward, max_turn = min(max_forward, MAX_FORWARD), min(max_turn, MAX_TURN)
+    return max(-max_forward, min(max_forward, forward)), max(-max_turn, min(max_turn, turn))
 
 
 class DriverLock:

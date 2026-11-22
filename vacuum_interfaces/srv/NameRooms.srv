@@ -1,0 +1,8 @@
+# Name rooms by looking: /assistant/name_rooms, served by the assistant node. The robot drives to
+# each room, takes a picture and names it. Nothing is saved: the answer is a proposal. Takes a few
+# minutes; /assistant/status says which room it is at. Needs navigation (a saved map) and an API key.
+Room[] rooms          # the rooms to name (as /rooms/find gives them)
+---
+bool success
+string message
+Room[] rooms          # the same rooms, named; a room it could not reach keeps its name

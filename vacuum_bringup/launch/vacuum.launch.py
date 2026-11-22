@@ -17,6 +17,8 @@ Commands:
     ros2 run vacuum_mode_manager mode mapping         # idle | mapping | navigation | manual | docking | failsafe (cleaning and exploring are entered by a job)
     ros2 run vacuum_mode_manager save_map house       # while in mapping mode (--replace to overwrite)
     ros2 run vacuum_mode_manager zones                # the map's no-go zones (add NAME X0 Y0 X1 Y1, delete NAME)
+    ros2 run vacuum_mode_manager settings             # speeds, row spacing, row direction (NAME=VALUE to change)
+    ros2 run vacuum_assistant ask "how did the last clean go?"   # the chat (needs an API key, see vacuum_assistant)
     ros2 run vacuum_coverage clean                    # clean everything, then dock (--area, --spot, --plan, --stay)
     ros2 run vacuum_exploration explore               # map the house by itself (--minutes N); Stop: mode mapping
 
@@ -27,6 +29,9 @@ Arguments:
                          ros2_ws/maps for the house, ros2_ws/maps_<world> for any other. The mode
                          manager compares it with the world the simulator announces on /sim/world
                          and stays in failsafe if they differ. tools/start_stack.sh sets it for you.
+    assistant:=false     leave the chat assistant and the object finder out
+    settings_file:=PATH  where the settings changed from the app are kept (default
+                         ros2_ws/robot_settings.yaml; the tests use a fresh one each run)
 """
 
 import os
@@ -75,6 +80,7 @@ def _stack(context):
         robot_description = f.read()
 
     sim_time = {"use_sim_time": True}
+    settings_file = LaunchConfiguration("settings_file").perform(context) or os.path.join(workspace, "robot_settings.yaml")
 
     def managed(package, executable, name, params, remappings=None, extra=None):
         """A lifecycle node the mode manager controls. If it crashes it is restarted (switched
@@ -134,6 +140,18 @@ def _stack(context):
                 respawn=True,
                 respawn_delay=2.0,
             ),
+            # the settings a user may change from the app (speeds, row spacing, row direction): keeps
+            # them in a file and publishes them latched. The cleaning node and the gateway follow
+            # them; until they arrive both use their own defaults, which are the same values.
+            Node(
+                package="vacuum_mode_manager",
+                executable="settings_node",
+                name="settings_node",
+                output="screen",
+                parameters=[{"settings_file": settings_file}],
+                respawn=True,
+                respawn_delay=2.0,
+            ),
             # the one node that commands the wheels. If it crashes, the base stops by itself when
             # commands end, and the mode manager goes to failsafe.
             Node(
@@ -173,6 +191,42 @@ def _stack(context):
                     "explorer_log": os.path.join(workspace, "..", "logs", "frontier_explorer.log"),
                 }],
                 condition=IfCondition(LaunchConfiguration("exploration")),
+                respawn=True,
+                respawn_delay=2.0,
+            ),
+            # the rooms of each saved map: found from the map, named by the user or the assistant.
+            Node(
+                package="vacuum_coverage",
+                executable="rooms_node",
+                name="rooms_node",
+                output="screen",
+                parameters=[{"maps_dir": maps_dir}],
+                respawn=True,
+                respawn_delay=2.0,
+            ),
+            # the object finder: looks for things named in words in the camera picture, on request.
+            # Its detector is loaded at start (a few seconds, on the graphics card) so the first look is quick.
+            Node(
+                package="vacuum_perception",
+                executable="object_finder",
+                name="object_finder",
+                output="screen",
+                parameters=[sim_time, {"load_at_start": True}],
+                condition=IfCondition(LaunchConfiguration("assistant")),
+                respawn=True,
+                respawn_delay=2.0,
+            ),
+            # the chat assistant: answers questions and does what it is asked, only through the robot's
+            # own services and actions (the mode manager, Nav2, the cleaning node and the safety gate
+            # keep the last word). Without an API key or internet it says so and nothing else
+            # changes. Restarted if it dies.
+            Node(
+                package="vacuum_assistant",
+                executable="assistant_node",
+                name="assistant_node",
+                output="screen",
+                parameters=[sim_time, {"maps_dir": maps_dir}],
+                condition=IfCondition(LaunchConfiguration("assistant")),
                 respawn=True,
                 respawn_delay=2.0,
             ),
@@ -242,7 +296,9 @@ def generate_launch_description():
         [
             DeclareLaunchArgument("rviz", default_value="true", description="open RViz"),
             DeclareLaunchArgument("exploration", default_value="true", description="start the exploration node"),
+            DeclareLaunchArgument("assistant", default_value="true", description="start the chat assistant"),
             DeclareLaunchArgument("world", default_value="house", description="the simulator's world (house or home)"),
+            DeclareLaunchArgument("settings_file", default_value="", description="the settings file (default ros2_ws/robot_settings.yaml)"),
             OpaqueFunction(function=_stack),
         ]
     )

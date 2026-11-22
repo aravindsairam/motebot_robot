@@ -211,7 +211,7 @@ def test_a_cleaning_job_from_the_phone_becomes_the_robots_fields():
                          return_to_dock=pb.CleaningJob.OPTION_ON, direction="y")
     fields = convert.cleaning_job_fields(job)
     assert fields == {"what": 2, "area": [], "spot_x": 1.5, "spot_y": -0.5, "plan_name": "", "direction": "y", "passes": 2,
-                      "edges": 1, "return_to_dock": 2}
+                      "edges": 1, "return_to_dock": 2, "room": ""}
 
 
 def test_a_bad_cleaning_job_from_the_phone_is_refused():
@@ -271,3 +271,49 @@ def test_reply_carries_the_cleaning_fields():
 def test_an_empty_cleaning_plan_is_still_a_message():
     out = convert.cleaning_plan(SimpleNamespace(job_id=0, target="", estimate=ros_estimate(), pieces=[]))
     assert out.job_id == 0 and len(out.pieces) == 0
+
+
+def _settings_msg(**values):
+    base = dict(cleaning_speed=0.25, manual_speed=0.15, row_spacing=0.2, row_angle_auto=False, row_angle=45.0,
+                CLEANING_SPEED_MIN=0.1, CLEANING_SPEED_MAX=0.3, MANUAL_SPEED_MIN=0.1, MANUAL_SPEED_MAX=0.3,
+                ROW_SPACING_MIN=0.1, ROW_SPACING_MAX=0.3, ROW_SPACING_STEP=0.05, MANUAL_TURN_PER_SPEED=4.0)
+    base.update(values)
+    return SimpleNamespace(**base)
+
+
+def test_robot_settings_carry_the_values_the_limits_and_the_turn_speed():
+    m = convert.robot_settings(_settings_msg())
+    assert (m.cleaning_speed, m.manual_speed, m.row_spacing, m.row_angle_auto, m.row_angle) == pytest.approx((0.25, 0.15, 0.2, False, 45.0))
+    assert (m.limits.cleaning_speed_min, m.limits.cleaning_speed_max) == pytest.approx((0.1, 0.3))
+    assert (m.limits.manual_speed_min, m.limits.manual_speed_max) == pytest.approx((0.1, 0.3))
+    assert (m.limits.row_spacing_min, m.limits.row_spacing_max, m.limits.row_spacing_step) == pytest.approx((0.1, 0.3, 0.05))
+    assert m.manual_turn_speed == pytest.approx(0.6)
+
+
+def test_settings_from_the_phone_fill_the_robots_message_and_nothing_else():
+    msg = SimpleNamespace(cleaning_speed=0.0, manual_speed=0.0, row_spacing=0.0, row_angle_auto=True, row_angle=0.0)
+    convert.fill_robot_settings(pb.RobotSettings(cleaning_speed=0.15, manual_speed=0.3, row_spacing=0.1, row_angle_auto=False,
+                                                 row_angle=120.0, manual_turn_speed=99.0), msg)
+    assert vars(msg) == pytest.approx(dict(cleaning_speed=0.15, manual_speed=0.3, row_spacing=0.1, row_angle_auto=False, row_angle=120.0))
+
+
+def test_the_settings_message_limits_are_the_robot_settings_limits():
+    from vacuum_interfaces.msg import RobotSettings
+    from vacuum_mode_manager import robot_settings
+    for name in ("CLEANING_SPEED_MIN", "CLEANING_SPEED_MAX", "MANUAL_SPEED_MIN", "MANUAL_SPEED_MAX", "ROW_SPACING_MIN",
+                 "ROW_SPACING_MAX", "ROW_SPACING_STEP", "MANUAL_TURN_PER_SPEED"):
+        assert getattr(RobotSettings, name) == pytest.approx(getattr(robot_settings, name)), name
+
+
+def test_rooms_and_the_assistant_answer_in_centimetres():
+    from types import SimpleNamespace as N
+    room = N(name="Kitchen", outline=N(points=[N(x=0.0, y=0.0, z=0.0), N(x=2.004, y=0.0, z=0.0), N(x=2.0, y=-1.5, z=0.0)]),
+             x=1.0, y=-0.5, area=3.25)
+    out = convert.rooms([room], "home")
+    assert out.map_name == "home" and list(out.rooms[0].points_cm) == [0, 0, 200, 0, 200, -150]
+    assert (out.rooms[0].x_cm, out.rooms[0].y_cm, out.rooms[0].area) == (100, -50, 3.25)
+    back = convert.room_fields(out.rooms[0])
+    assert back == {"name": "Kitchen", "outline": [(0.0, 0.0), (2.0, 0.0), (2.0, -1.5)], "x": 1.0, "y": -0.5, "area": 3.25}
+    answer = convert.assistant_answer(N(reply="On my way.", tools_used=["go_to_room"], picture_jpeg=[1, 2], mark=[1.5, -2.25]))
+    assert answer.text == "On my way." and answer.picture_jpeg == bytes([1, 2]) and list(answer.mark_cm) == [150, -225]
+    assert list(convert.assistant_answer(N(reply="", tools_used=[], picture_jpeg=[], mark=[])).mark_cm) == []

@@ -1,0 +1,10 @@
+# Ask the robot's assistant something in plain words: /assistant/ask, served by the assistant node.
+# Answered when the assistant has finished: it may look things up on the robot first (a few seconds).
+string conversation   # chosen by the asker: the same id carries on a conversation, a new one starts afresh
+string text           # what the user said
+---
+bool success          # false: the assistant could not answer (no API key, no internet, ...); `reply` says why
+string reply          # the answer, in plain words
+string[] tools_used   # what the assistant looked at or did on the robot, in order (for tests and the log)
+uint8[] picture_jpeg  # a picture that goes with the answer (what the camera saw); empty if none
+float64[] mark        # a place on the map that goes with the answer: x, y (metres); empty if none

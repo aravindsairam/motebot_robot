@@ -24,6 +24,9 @@ class CommandType(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     COMMAND_CHANGE_MODE: _ClassVar[CommandType]
     COMMAND_SAVE_MAP: _ClassVar[CommandType]
     COMMAND_SET_NO_GO_ZONES: _ClassVar[CommandType]
+    COMMAND_SET_ROBOT_SETTINGS: _ClassVar[CommandType]
+    COMMAND_FIND_ROOMS: _ClassVar[CommandType]
+    COMMAND_SET_ROOMS: _ClassVar[CommandType]
     COMMAND_GO_TO: _ClassVar[CommandType]
     COMMAND_CANCEL_GOAL: _ClassVar[CommandType]
     COMMAND_DRIVE: _ClassVar[CommandType]
@@ -36,6 +39,8 @@ class CommandType(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     COMMAND_DELETE_CLEANING_PLAN: _ClassVar[CommandType]
     COMMAND_LIST_CLEANING_HISTORY: _ClassVar[CommandType]
     COMMAND_GET_CLEANING_RECORD: _ClassVar[CommandType]
+    COMMAND_ASK_ASSISTANT: _ClassVar[CommandType]
+    COMMAND_NAME_ROOMS: _ClassVar[CommandType]
 
 class DataType(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
@@ -44,6 +49,8 @@ class DataType(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     DATA_HEARTBEAT: _ClassVar[DataType]
     DATA_ROBOT_STATE: _ClassVar[DataType]
     DATA_SAFETY_STATUS: _ClassVar[DataType]
+    DATA_ROBOT_SETTINGS: _ClassVar[DataType]
+    DATA_ROOMS: _ClassVar[DataType]
     DATA_MAP: _ClassVar[DataType]
     DATA_ROBOT_POSE: _ClassVar[DataType]
     DATA_ROUTE: _ClassVar[DataType]
@@ -54,6 +61,7 @@ class DataType(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     DATA_CLEANING_STATUS: _ClassVar[DataType]
     DATA_CLEANING_PLAN: _ClassVar[DataType]
     DATA_CLEANED_AREA: _ClassVar[DataType]
+    DATA_ASSISTANT_STATUS: _ClassVar[DataType]
     DATA_REPLY: _ClassVar[DataType]
 PROTOCOL_UNSPECIFIED: Protocol
 PROTOCOL_VERSION: Protocol
@@ -64,6 +72,9 @@ COMMAND_PING: CommandType
 COMMAND_CHANGE_MODE: CommandType
 COMMAND_SAVE_MAP: CommandType
 COMMAND_SET_NO_GO_ZONES: CommandType
+COMMAND_SET_ROBOT_SETTINGS: CommandType
+COMMAND_FIND_ROOMS: CommandType
+COMMAND_SET_ROOMS: CommandType
 COMMAND_GO_TO: CommandType
 COMMAND_CANCEL_GOAL: CommandType
 COMMAND_DRIVE: CommandType
@@ -76,11 +87,15 @@ COMMAND_LIST_CLEANING_PLANS: CommandType
 COMMAND_DELETE_CLEANING_PLAN: CommandType
 COMMAND_LIST_CLEANING_HISTORY: CommandType
 COMMAND_GET_CLEANING_RECORD: CommandType
+COMMAND_ASK_ASSISTANT: CommandType
+COMMAND_NAME_ROOMS: CommandType
 DATA_UNSPECIFIED: DataType
 DATA_HELLO: DataType
 DATA_HEARTBEAT: DataType
 DATA_ROBOT_STATE: DataType
 DATA_SAFETY_STATUS: DataType
+DATA_ROBOT_SETTINGS: DataType
+DATA_ROOMS: DataType
 DATA_MAP: DataType
 DATA_ROBOT_POSE: DataType
 DATA_ROUTE: DataType
@@ -91,6 +106,7 @@ DATA_FRONTIERS: DataType
 DATA_CLEANING_STATUS: DataType
 DATA_CLEANING_PLAN: DataType
 DATA_CLEANED_AREA: DataType
+DATA_ASSISTANT_STATUS: DataType
 DATA_REPLY: DataType
 
 class Hello(_message.Message):
@@ -212,6 +228,84 @@ class NoGoZones(_message.Message):
     map_name: str
     def __init__(self, zones: _Optional[_Iterable[_Union[NoGoZones.Zone, _Mapping]]] = ..., map_name: _Optional[str] = ...) -> None: ...
 
+class RobotSettings(_message.Message):
+    __slots__ = ("cleaning_speed", "manual_speed", "row_spacing", "row_angle_auto", "row_angle", "limits", "manual_turn_speed")
+    class Limits(_message.Message):
+        __slots__ = ("cleaning_speed_min", "cleaning_speed_max", "manual_speed_min", "manual_speed_max", "row_spacing_min", "row_spacing_max", "row_spacing_step")
+        CLEANING_SPEED_MIN_FIELD_NUMBER: _ClassVar[int]
+        CLEANING_SPEED_MAX_FIELD_NUMBER: _ClassVar[int]
+        MANUAL_SPEED_MIN_FIELD_NUMBER: _ClassVar[int]
+        MANUAL_SPEED_MAX_FIELD_NUMBER: _ClassVar[int]
+        ROW_SPACING_MIN_FIELD_NUMBER: _ClassVar[int]
+        ROW_SPACING_MAX_FIELD_NUMBER: _ClassVar[int]
+        ROW_SPACING_STEP_FIELD_NUMBER: _ClassVar[int]
+        cleaning_speed_min: float
+        cleaning_speed_max: float
+        manual_speed_min: float
+        manual_speed_max: float
+        row_spacing_min: float
+        row_spacing_max: float
+        row_spacing_step: float
+        def __init__(self, cleaning_speed_min: _Optional[float] = ..., cleaning_speed_max: _Optional[float] = ..., manual_speed_min: _Optional[float] = ..., manual_speed_max: _Optional[float] = ..., row_spacing_min: _Optional[float] = ..., row_spacing_max: _Optional[float] = ..., row_spacing_step: _Optional[float] = ...) -> None: ...
+    CLEANING_SPEED_FIELD_NUMBER: _ClassVar[int]
+    MANUAL_SPEED_FIELD_NUMBER: _ClassVar[int]
+    ROW_SPACING_FIELD_NUMBER: _ClassVar[int]
+    ROW_ANGLE_AUTO_FIELD_NUMBER: _ClassVar[int]
+    ROW_ANGLE_FIELD_NUMBER: _ClassVar[int]
+    LIMITS_FIELD_NUMBER: _ClassVar[int]
+    MANUAL_TURN_SPEED_FIELD_NUMBER: _ClassVar[int]
+    cleaning_speed: float
+    manual_speed: float
+    row_spacing: float
+    row_angle_auto: bool
+    row_angle: float
+    limits: RobotSettings.Limits
+    manual_turn_speed: float
+    def __init__(self, cleaning_speed: _Optional[float] = ..., manual_speed: _Optional[float] = ..., row_spacing: _Optional[float] = ..., row_angle_auto: bool = ..., row_angle: _Optional[float] = ..., limits: _Optional[_Union[RobotSettings.Limits, _Mapping]] = ..., manual_turn_speed: _Optional[float] = ...) -> None: ...
+
+class Rooms(_message.Message):
+    __slots__ = ("rooms", "map_name")
+    class Room(_message.Message):
+        __slots__ = ("name", "points_cm", "x_cm", "y_cm", "area")
+        NAME_FIELD_NUMBER: _ClassVar[int]
+        POINTS_CM_FIELD_NUMBER: _ClassVar[int]
+        X_CM_FIELD_NUMBER: _ClassVar[int]
+        Y_CM_FIELD_NUMBER: _ClassVar[int]
+        AREA_FIELD_NUMBER: _ClassVar[int]
+        name: str
+        points_cm: _containers.RepeatedScalarFieldContainer[int]
+        x_cm: int
+        y_cm: int
+        area: float
+        def __init__(self, name: _Optional[str] = ..., points_cm: _Optional[_Iterable[int]] = ..., x_cm: _Optional[int] = ..., y_cm: _Optional[int] = ..., area: _Optional[float] = ...) -> None: ...
+    ROOMS_FIELD_NUMBER: _ClassVar[int]
+    MAP_NAME_FIELD_NUMBER: _ClassVar[int]
+    rooms: _containers.RepeatedCompositeFieldContainer[Rooms.Room]
+    map_name: str
+    def __init__(self, rooms: _Optional[_Iterable[_Union[Rooms.Room, _Mapping]]] = ..., map_name: _Optional[str] = ...) -> None: ...
+
+class AssistantStatus(_message.Message):
+    __slots__ = ("busy", "conversation", "doing")
+    BUSY_FIELD_NUMBER: _ClassVar[int]
+    CONVERSATION_FIELD_NUMBER: _ClassVar[int]
+    DOING_FIELD_NUMBER: _ClassVar[int]
+    busy: bool
+    conversation: str
+    doing: str
+    def __init__(self, busy: bool = ..., conversation: _Optional[str] = ..., doing: _Optional[str] = ...) -> None: ...
+
+class AssistantAnswer(_message.Message):
+    __slots__ = ("text", "tools_used", "picture_jpeg", "mark_cm")
+    TEXT_FIELD_NUMBER: _ClassVar[int]
+    TOOLS_USED_FIELD_NUMBER: _ClassVar[int]
+    PICTURE_JPEG_FIELD_NUMBER: _ClassVar[int]
+    MARK_CM_FIELD_NUMBER: _ClassVar[int]
+    text: str
+    tools_used: _containers.RepeatedScalarFieldContainer[str]
+    picture_jpeg: bytes
+    mark_cm: _containers.RepeatedScalarFieldContainer[int]
+    def __init__(self, text: _Optional[str] = ..., tools_used: _Optional[_Iterable[str]] = ..., picture_jpeg: _Optional[bytes] = ..., mark_cm: _Optional[_Iterable[int]] = ...) -> None: ...
+
 class RequestId(_message.Message):
     __slots__ = ("request_id",)
     REQUEST_ID_FIELD_NUMBER: _ClassVar[int]
@@ -252,6 +346,48 @@ class SetNoGoZones(_message.Message):
     zones: _containers.RepeatedCompositeFieldContainer[NoGoZones.Zone]
     def __init__(self, request_id: _Optional[int] = ..., map_name: _Optional[str] = ..., zones: _Optional[_Iterable[_Union[NoGoZones.Zone, _Mapping]]] = ...) -> None: ...
 
+class SetRobotSettings(_message.Message):
+    __slots__ = ("request_id", "settings")
+    REQUEST_ID_FIELD_NUMBER: _ClassVar[int]
+    SETTINGS_FIELD_NUMBER: _ClassVar[int]
+    request_id: int
+    settings: RobotSettings
+    def __init__(self, request_id: _Optional[int] = ..., settings: _Optional[_Union[RobotSettings, _Mapping]] = ...) -> None: ...
+
+class FindRooms(_message.Message):
+    __slots__ = ("request_id",)
+    REQUEST_ID_FIELD_NUMBER: _ClassVar[int]
+    request_id: int
+    def __init__(self, request_id: _Optional[int] = ...) -> None: ...
+
+class SetRooms(_message.Message):
+    __slots__ = ("request_id", "map_name", "rooms")
+    REQUEST_ID_FIELD_NUMBER: _ClassVar[int]
+    MAP_NAME_FIELD_NUMBER: _ClassVar[int]
+    ROOMS_FIELD_NUMBER: _ClassVar[int]
+    request_id: int
+    map_name: str
+    rooms: _containers.RepeatedCompositeFieldContainer[Rooms.Room]
+    def __init__(self, request_id: _Optional[int] = ..., map_name: _Optional[str] = ..., rooms: _Optional[_Iterable[_Union[Rooms.Room, _Mapping]]] = ...) -> None: ...
+
+class AskAssistant(_message.Message):
+    __slots__ = ("request_id", "conversation", "text")
+    REQUEST_ID_FIELD_NUMBER: _ClassVar[int]
+    CONVERSATION_FIELD_NUMBER: _ClassVar[int]
+    TEXT_FIELD_NUMBER: _ClassVar[int]
+    request_id: int
+    conversation: str
+    text: str
+    def __init__(self, request_id: _Optional[int] = ..., conversation: _Optional[str] = ..., text: _Optional[str] = ...) -> None: ...
+
+class NameRooms(_message.Message):
+    __slots__ = ("request_id", "rooms")
+    REQUEST_ID_FIELD_NUMBER: _ClassVar[int]
+    ROOMS_FIELD_NUMBER: _ClassVar[int]
+    request_id: int
+    rooms: _containers.RepeatedCompositeFieldContainer[Rooms.Room]
+    def __init__(self, request_id: _Optional[int] = ..., rooms: _Optional[_Iterable[_Union[Rooms.Room, _Mapping]]] = ...) -> None: ...
+
 class GoTo(_message.Message):
     __slots__ = ("request_id", "x", "y", "heading")
     REQUEST_ID_FIELD_NUMBER: _ClassVar[int]
@@ -283,7 +419,7 @@ class Drive(_message.Message):
     def __init__(self, request_id: _Optional[int] = ..., forward: _Optional[float] = ..., turn: _Optional[float] = ...) -> None: ...
 
 class Reply(_message.Message):
-    __slots__ = ("request_id", "result", "message", "goal_id", "estimate", "plans", "history", "record", "replanned", "job_id")
+    __slots__ = ("request_id", "result", "message", "goal_id", "estimate", "plans", "history", "record", "replanned", "job_id", "answer", "rooms")
     class Result(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
         __slots__ = ()
         RESULT_UNSPECIFIED: _ClassVar[Reply.Result]
@@ -314,6 +450,8 @@ class Reply(_message.Message):
     RECORD_FIELD_NUMBER: _ClassVar[int]
     REPLANNED_FIELD_NUMBER: _ClassVar[int]
     JOB_ID_FIELD_NUMBER: _ClassVar[int]
+    ANSWER_FIELD_NUMBER: _ClassVar[int]
+    ROOMS_FIELD_NUMBER: _ClassVar[int]
     request_id: int
     result: Reply.Result
     message: str
@@ -324,7 +462,9 @@ class Reply(_message.Message):
     record: CleaningRecord
     replanned: bool
     job_id: int
-    def __init__(self, request_id: _Optional[int] = ..., result: _Optional[_Union[Reply.Result, str]] = ..., message: _Optional[str] = ..., goal_id: _Optional[bytes] = ..., estimate: _Optional[_Union[CleaningEstimate, _Mapping]] = ..., plans: _Optional[_Iterable[_Union[CleaningPlanInfo, _Mapping]]] = ..., history: _Optional[_Union[CleaningHistory, _Mapping]] = ..., record: _Optional[_Union[CleaningRecord, _Mapping]] = ..., replanned: bool = ..., job_id: _Optional[int] = ...) -> None: ...
+    answer: AssistantAnswer
+    rooms: Rooms
+    def __init__(self, request_id: _Optional[int] = ..., result: _Optional[_Union[Reply.Result, str]] = ..., message: _Optional[str] = ..., goal_id: _Optional[bytes] = ..., estimate: _Optional[_Union[CleaningEstimate, _Mapping]] = ..., plans: _Optional[_Iterable[_Union[CleaningPlanInfo, _Mapping]]] = ..., history: _Optional[_Union[CleaningHistory, _Mapping]] = ..., record: _Optional[_Union[CleaningRecord, _Mapping]] = ..., replanned: bool = ..., job_id: _Optional[int] = ..., answer: _Optional[_Union[AssistantAnswer, _Mapping]] = ..., rooms: _Optional[_Union[Rooms, _Mapping]] = ...) -> None: ...
 
 class SafetyStatus(_message.Message):
     __slots__ = ("source", "blocked_reason", "cliff", "bumper", "off_floor", "reflex_active", "stale")
@@ -345,17 +485,19 @@ class SafetyStatus(_message.Message):
     def __init__(self, source: _Optional[str] = ..., blocked_reason: _Optional[str] = ..., cliff: bool = ..., bumper: bool = ..., off_floor: bool = ..., reflex_active: bool = ..., stale: _Optional[_Iterable[str]] = ...) -> None: ...
 
 class CleaningJob(_message.Message):
-    __slots__ = ("what", "area", "spot_x", "spot_y", "plan_name", "direction", "passes", "edges", "return_to_dock")
+    __slots__ = ("what", "area", "spot_x", "spot_y", "plan_name", "direction", "passes", "edges", "return_to_dock", "room")
     class What(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
         __slots__ = ()
         WHAT_EVERYTHING: _ClassVar[CleaningJob.What]
         WHAT_AREA: _ClassVar[CleaningJob.What]
         WHAT_SPOT: _ClassVar[CleaningJob.What]
         WHAT_PLAN: _ClassVar[CleaningJob.What]
+        WHAT_ROOM: _ClassVar[CleaningJob.What]
     WHAT_EVERYTHING: CleaningJob.What
     WHAT_AREA: CleaningJob.What
     WHAT_SPOT: CleaningJob.What
     WHAT_PLAN: CleaningJob.What
+    WHAT_ROOM: CleaningJob.What
     class Option(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
         __slots__ = ()
         OPTION_DEFAULT: _ClassVar[CleaningJob.Option]
@@ -373,6 +515,7 @@ class CleaningJob(_message.Message):
     PASSES_FIELD_NUMBER: _ClassVar[int]
     EDGES_FIELD_NUMBER: _ClassVar[int]
     RETURN_TO_DOCK_FIELD_NUMBER: _ClassVar[int]
+    ROOM_FIELD_NUMBER: _ClassVar[int]
     what: CleaningJob.What
     area: _containers.RepeatedScalarFieldContainer[float]
     spot_x: float
@@ -382,7 +525,8 @@ class CleaningJob(_message.Message):
     passes: int
     edges: CleaningJob.Option
     return_to_dock: CleaningJob.Option
-    def __init__(self, what: _Optional[_Union[CleaningJob.What, str]] = ..., area: _Optional[_Iterable[float]] = ..., spot_x: _Optional[float] = ..., spot_y: _Optional[float] = ..., plan_name: _Optional[str] = ..., direction: _Optional[str] = ..., passes: _Optional[int] = ..., edges: _Optional[_Union[CleaningJob.Option, str]] = ..., return_to_dock: _Optional[_Union[CleaningJob.Option, str]] = ...) -> None: ...
+    room: str
+    def __init__(self, what: _Optional[_Union[CleaningJob.What, str]] = ..., area: _Optional[_Iterable[float]] = ..., spot_x: _Optional[float] = ..., spot_y: _Optional[float] = ..., plan_name: _Optional[str] = ..., direction: _Optional[str] = ..., passes: _Optional[int] = ..., edges: _Optional[_Union[CleaningJob.Option, str]] = ..., return_to_dock: _Optional[_Union[CleaningJob.Option, str]] = ..., room: _Optional[str] = ...) -> None: ...
 
 class CleaningEstimate(_message.Message):
     __slots__ = ("rows", "edges", "turns", "transits", "distance", "planned_area", "left_out_area", "unreachable_area", "time")

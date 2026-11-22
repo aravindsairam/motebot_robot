@@ -8,36 +8,41 @@ import math
 from dataclasses import asdict, dataclass, field, replace
 from typing import List, Optional, Tuple
 
-from .planner import Options, spot_area
+from .planner import Options, parse_direction, spot_area
 
-EVERYTHING, AREA, SPOT, PLAN = "everything", "area", "spot", "plan"
-WHATS = (EVERYTHING, AREA, SPOT, PLAN)
+EVERYTHING, AREA, SPOT, PLAN, ROOM = "everything", "area", "spot", "plan", "room"
+WHATS = (EVERYTHING, AREA, SPOT, PLAN, ROOM)
 
 
 @dataclass(frozen=True)
 class JobSpec:
     what: str = EVERYTHING
-    area: List[Tuple[float, float]] = field(default_factory=list)  # AREA: polygon corners, map frame
+    area: List[Tuple[float, float]] = field(default_factory=list)  # AREA: polygon corners, map frame; ROOM: its outline, once looked up
     spot: Optional[Tuple[float, float]] = None  # SPOT: the point
     plan_name: str = ""  # PLAN: the saved plan; also kept when a saved plan is run
-    direction: str = "auto"
+    direction: str = "auto"  # "auto", "x", "y", or the rows' angle in degrees as text ("45")
     passes: int = 1
     edges: Optional[bool] = None  # None: the robot's setting
     return_to_dock: bool = True
+    room: str = ""  # ROOM: the room's name
 
     @property
     def target(self) -> str:
         """What is being cleaned, in a word or the plan's name."""
         if self.plan_name:
             return self.plan_name
+        if self.what == ROOM and self.room:
+            return self.room
         return self.what
 
     def check(self) -> Optional[str]:
         """Why this job cannot be done, or None."""
         if self.what not in WHATS:
             return f"unknown kind of job '{self.what}' (what to clean must be one of {', '.join(WHATS)})"
-        if self.direction not in ("auto", "x", "y"):
-            return f"unknown row direction '{self.direction}': use x, y or auto"
+        try:
+            parse_direction(self.direction)
+        except ValueError as exc:
+            return str(exc)
         if self.passes not in (1, 2):
             return "passes must be 1 or 2"
         if self.what == AREA:
@@ -52,13 +57,15 @@ class JobSpec:
                 return "the spot is not a number"
         if self.what == PLAN and not self.plan_name.strip():
             return "no plan name given"
+        if self.what == ROOM and not self.room.strip():
+            return "no room name given"
         return None
 
     def options(self, edges_by_default: bool) -> Options:
         return Options(direction=self.direction, passes=self.passes, edges=edges_by_default if self.edges is None else self.edges)
 
     def area_polygon(self, spot_size: float) -> Optional[List[Tuple[float, float]]]:
-        if self.what == AREA:
+        if self.what == AREA or (self.what == ROOM and self.area):
             return [tuple(p) for p in self.area]
         if self.what == SPOT:
             return spot_area(self.spot[0], self.spot[1], spot_size)
@@ -85,6 +92,7 @@ class JobSpec:
             passes=int(d.get("passes", 1)),
             edges=None if d.get("edges") is None else bool(d["edges"]),
             return_to_dock=bool(d.get("return_to_dock", True)),
+            room=str(d.get("room", "")),
         )
 
 

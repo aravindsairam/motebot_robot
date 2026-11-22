@@ -1,0 +1,9 @@
+# Change the settings a user may change: /set_robot_settings, served by the mode manager.
+# The request is the complete new set. Refused, with the reason, when a value is outside the
+# limits in RobotSettings; nothing is changed then. Once accepted they are saved, published on
+# /robot_settings, and used from then on (see RobotSettings for when each one takes hold).
+RobotSettings settings
+---
+bool success
+string message              # the reason when refused; otherwise what was saved
+RobotSettings settings      # the settings in force after this call

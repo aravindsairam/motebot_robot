@@ -7,7 +7,8 @@ find_package(ament_cmake REQUIRED)
 find_package(ament_cmake_python REQUIRED)
 
 ament_python_install_package(${PROJECT_NAME})
-install(PROGRAMS scripts/mode_manager scripts/mode scripts/save_map scripts/zones DESTINATION lib/${PROJECT_NAME})
+install(PROGRAMS scripts/mode_manager scripts/mode scripts/save_map scripts/zones scripts/settings_node scripts/settings
+        DESTINATION lib/${PROJECT_NAME})
 
 if(BUILD_TESTING)
   find_package(ament_cmake_pytest REQUIRED)

@@ -39,6 +39,32 @@ def robot_state(msg) -> pb.RobotState:
     )
 
 
+def robot_settings(msg) -> pb.RobotSettings:
+    """From vacuum_interfaces/msg/RobotSettings; the limits are that message's constants."""
+    return pb.RobotSettings(
+        cleaning_speed=msg.cleaning_speed,
+        manual_speed=msg.manual_speed,
+        row_spacing=msg.row_spacing,
+        row_angle_auto=bool(msg.row_angle_auto),
+        row_angle=msg.row_angle,
+        limits=pb.RobotSettings.Limits(
+            cleaning_speed_min=msg.CLEANING_SPEED_MIN, cleaning_speed_max=msg.CLEANING_SPEED_MAX,
+            manual_speed_min=msg.MANUAL_SPEED_MIN, manual_speed_max=msg.MANUAL_SPEED_MAX,
+            row_spacing_min=msg.ROW_SPACING_MIN, row_spacing_max=msg.ROW_SPACING_MAX,
+            row_spacing_step=msg.ROW_SPACING_STEP),
+        manual_turn_speed=msg.manual_speed * msg.MANUAL_TURN_PER_SPEED,
+    )
+
+
+def fill_robot_settings(settings: pb.RobotSettings, msg) -> None:
+    """The app's settings into a vacuum_interfaces/msg/RobotSettings (the robot checks them)."""
+    msg.cleaning_speed = settings.cleaning_speed
+    msg.manual_speed = settings.manual_speed
+    msg.row_spacing = settings.row_spacing
+    msg.row_angle_auto = settings.row_angle_auto
+    msg.row_angle = settings.row_angle
+
+
 def map_message(msg, version: int) -> pb.Map:
     """From nav_msgs/msg/OccupancyGrid."""
     info = msg.info
@@ -123,13 +149,14 @@ _STATUS_NUMBERS = ("job_id", "target", "started", "coverage", "cleaned_area", "p
                    "time_left", "rows_done", "rows_total", "rows_skipped", "current_row", "edges_done", "edges_total",
                    "edges_skipped", "current_edge", "bumps", "pauses", "piece")
 _ESTIMATE_FIELDS = ("rows", "edges", "turns", "transits", "distance", "planned_area", "left_out_area", "unreachable_area", "time")
-_JOB_FIELDS = ("what", "area", "spot_x", "spot_y", "plan_name", "direction", "passes", "edges", "return_to_dock")
+_JOB_FIELDS = ("what", "area", "spot_x", "spot_y", "plan_name", "direction", "passes", "edges", "return_to_dock", "room")
 
 
 def cleaning_job(msg) -> pb.CleaningJob:
     """From vacuum_interfaces/msg/CleaningJob. The numbers of both enums are the same."""
     return pb.CleaningJob(what=msg.what, area=list(msg.area), spot_x=msg.spot_x, spot_y=msg.spot_y, plan_name=msg.plan_name,
-                          direction=msg.direction, passes=msg.passes, edges=msg.edges, return_to_dock=msg.return_to_dock)
+                          direction=msg.direction, passes=msg.passes, edges=msg.edges, return_to_dock=msg.return_to_dock,
+                          room=getattr(msg, "room", ""))
 
 
 def cleaning_job_fields(job: pb.CleaningJob) -> dict:
@@ -144,6 +171,7 @@ def cleaning_job_fields(job: pb.CleaningJob) -> dict:
         "passes": int(job.passes),
         "edges": int(job.edges),
         "return_to_dock": int(job.return_to_dock),
+        "room": job.room,
     }
 
 
@@ -241,3 +269,47 @@ def cleaning_history(records, totals) -> pb.CleaningHistory:
         records=[cleaning_record(r) for r in records],
         totals=pb.CleaningTotals(cleans=totals.cleans, area=totals.area, time=totals.time, distance=totals.distance),
     )
+
+
+# ---------------------------------------------------------------- rooms and the assistant
+def _cm(v: float) -> int:
+    return int(round(float(v) * 100.0))
+
+
+def room(msg) -> pb.Rooms.Room:
+    """From vacuum_interfaces/msg/Room."""
+    points = []
+    for p in msg.outline.points:
+        points += [_cm(p.x), _cm(p.y)]
+    return pb.Rooms.Room(name=msg.name, points_cm=points, x_cm=_cm(msg.x), y_cm=_cm(msg.y), area=msg.area)
+
+
+def rooms(room_msgs, map_name: str) -> pb.Rooms:
+    """From vacuum_interfaces/msg/Rooms (its rooms and map name), or a list of Room."""
+    return pb.Rooms(rooms=[room(r) for r in room_msgs], map_name=map_name)
+
+
+def room_fields(r: pb.Rooms.Room) -> dict:
+    """The fields of vacuum_interfaces/msg/Room for a room from the phone, in metres:
+    {name, outline: [(x, y), ...], x, y, area}."""
+    pts = list(r.points_cm)
+    return {
+        "name": r.name.strip(),
+        "outline": [(pts[i] / 100.0, pts[i + 1] / 100.0) for i in range(0, len(pts) - 1, 2)],
+        "x": r.x_cm / 100.0,
+        "y": r.y_cm / 100.0,
+        "area": float(r.area),
+    }
+
+
+def assistant_status(msg) -> pb.AssistantStatus:
+    """From vacuum_interfaces/msg/AssistantStatus."""
+    return pb.AssistantStatus(busy=msg.busy, conversation=msg.conversation, doing=msg.doing)
+
+
+def assistant_answer(response) -> pb.AssistantAnswer:
+    """From the answer of vacuum_interfaces/srv/AskAssistant."""
+    mark = list(response.mark)
+    return pb.AssistantAnswer(text=response.reply, tools_used=list(response.tools_used),
+                              picture_jpeg=bytes(bytearray(response.picture_jpeg)),
+                              mark_cm=[_cm(mark[0]), _cm(mark[1])] if len(mark) >= 2 else [])

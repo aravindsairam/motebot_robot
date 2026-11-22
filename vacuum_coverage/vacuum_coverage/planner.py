@@ -26,7 +26,8 @@ The method:
   4. The parts are cleaned one at a time, in the order with the shortest trips between them (every
      order is tried when there are few), and each part is left near the way to the next.
   5. In each part, rows on lines along x or y ("auto": whichever needs fewer turns and transits in
-     that part); on each line, the unbroken runs of row-clear cells are the rows, fitted to the edges
+     that part), or at an angle the user chose (the lines are then laid over the map turned by that
+     angle); on each line, the unbroken runs of row-clear cells are the rows, fitted to the edges
      of each region and spread evenly at no more than `row_spacing`; then extra rows are added on
      in-between lines while one would clean at least `min_extra_area` that nothing else reaches.
      A row is left out if everything it would clean is cleaned anyway: by the other rows, by the
@@ -68,6 +69,11 @@ _TRANSIT_COST = 0.3  # m: what a trip Nav2 plans costs beyond its length, when c
 _EXACT_ORDER_PARTS = 8  # up to this many parts, every order of them is weighed
 _MOVE_RUN = 3  # the longest run of regions moved elsewhere in one step when improving an order
 _MANY_ITEMS = 40  # with more regions than this in a part, only the nearest-first order is improved (time)
+# A row is left out as needless only if the others reach the floor within half a row spacing of it
+# plus this much. At the default spacing (0.25) that is the whole cleaning width (0.30), as before;
+# at a closer spacing the user chose, the overlap they asked for is kept instead of every other row
+# being dropped (its two neighbours alone would reach all its floor).
+_NEEDLESS_MARGIN = 0.025
 
 
 class PlanError(Exception):
@@ -99,7 +105,9 @@ class Settings:
 
 @dataclass(frozen=True)
 class Options:
-    direction: str = "auto"  # "x", "y", or "auto": in each part, whichever needs fewer turns and transits
+    # "auto": in each part, x or y, whichever needs fewer turns and transits. "x", "y", or the angle
+    # of the rows in degrees from the map's x axis (a number, or one as text: "45").
+    direction: str = "auto"
     passes: int = 1  # 2: a second pass at right angles to the first
     edges: bool = False  # a pass along walls and furniture after the rows
 
@@ -144,7 +152,7 @@ class Plan:
     left_out: np.ndarray  # bool: reachable floor the plan misses
     unreachable: np.ndarray  # bool: floor the tool would reach from parts the robot cannot get to
     estimate: Estimate
-    directions: List[str] = field(default_factory=list)  # row direction of each pass: "x", "y", or "mixed" (by part)
+    directions: List[str] = field(default_factory=list)  # row direction of each pass: "x", "y", "45°", or "mixed" (by part)
     reachable: Optional[np.ndarray] = None  # bool: the reachable floor, fixed before any row is laid
     parts: Optional[np.ndarray] = None  # int per cell: the part (room, 1, 2, ...) of each place the robot can get to; 0 elsewhere
     part_order: List[int] = field(default_factory=list)  # the parts in the order they are cleaned
@@ -156,25 +164,94 @@ def spot_area(x: float, y: float, size: float) -> List[Point]:
     return [(x - h, y - h), (x + h, y - h), (x + h, y + h), (x - h, y + h)]
 
 
+# ---------------------------------------------------------------- row directions
+def parse_direction(direction) -> Optional[float]:
+    """The angle of the rows in degrees from the map's x axis, 0 up to (not including) 180; None
+    for "auto". Takes "auto", "x" (0), "y" (90) or a number, also as text. ValueError otherwise."""
+    if isinstance(direction, str):
+        text = direction.strip().lower()
+        if text == "auto":
+            return None
+        if text in ("x", "y"):
+            return 0.0 if text == "x" else 90.0
+        try:
+            direction = float(text)
+        except ValueError:
+            raise ValueError(f"unknown row direction '{direction}': use auto, x, y or an angle in degrees") from None
+    angle = float(direction)
+    if not math.isfinite(angle):
+        raise ValueError("the row direction is not a number")
+    angle = round(angle % 180.0, 6)
+    return 0.0 if angle >= 180.0 else angle
+
+
+def direction_name(angle: float) -> str:
+    """How a row direction is written: "x", "y", or the angle ("45°")."""
+    if angle == 0.0:
+        return "x"
+    if angle == 90.0:
+        return "y"
+    return f"{angle:g}°"
+
+
 # ---------------------------------------------------------------- the frame of one direction
 class _Frame:
     """Rows along x run over the grid's columns, one line per grid row; rows along y over its rows.
-    Working in "lines and positions" lets one piece of code do both."""
+    Working in "lines and positions" lets one piece of code do both.
 
-    def __init__(self, grid: Grid, direction: str):
+    Rows at any other angle run over a second grid of the same cell size, laid over the map turned
+    by that angle: its lines run along the rows. A mask is seen through it by taking, for each of
+    its cells, the map cell its centre falls in. `clear` then says where a row may really go."""
+
+    def __init__(self, grid: Grid, angle: float):
         self.grid = grid
-        self.direction = direction
+        self.angle = angle
+        self.turned = angle not in (0.0, 90.0)
+        self.clear: Optional[np.ndarray] = None  # turned frames: cells whose own centre is row-clear (see _Context._frame)
+        if not self.turned:
+            return
+        res = grid.resolution
+        h, w = grid.shape
+        self._cos, self._sin = math.cos(math.radians(angle)), math.sin(math.radians(angle))
+        # Along the rows (a) and across them (b): the map's corners give the size of the turned grid.
+        corners = [(grid.origin[0] + i * w * res, grid.origin[1] + j * h * res) for i in (0, 1) for j in (0, 1)]
+        along = [x * self._cos + y * self._sin for x, y in corners]
+        across = [-x * self._sin + y * self._cos for x, y in corners]
+        self._a0, self._b0 = min(along), min(across)
+        self.shape = (int(math.ceil((max(across) - self._b0) / res - _EPS)), int(math.ceil((max(along) - self._a0) / res - _EPS)))
+        lines, positions = np.mgrid[0:self.shape[0], 0:self.shape[1]]
+        a = self._a0 + (positions + 0.5) * res
+        b = self._b0 + (lines + 0.5) * res
+        self._x = a * self._cos - b * self._sin
+        self._y = a * self._sin + b * self._cos
+        cols = np.floor((self._x - grid.origin[0]) / res).astype(np.int64)
+        rows = np.floor((self._y - grid.origin[1]) / res).astype(np.int64)
+        self._on = (rows >= 0) & (rows < h) & (cols >= 0) & (cols < w)
+        self._rows, self._cols = rows[self._on], cols[self._on]
 
     def view(self, mask: np.ndarray) -> np.ndarray:
-        return mask if self.direction == "x" else mask.T
-
-    def back(self, mask: np.ndarray) -> np.ndarray:
-        return mask if self.direction == "x" else mask.T
+        if not self.turned:
+            return mask if self.angle == 0.0 else mask.T
+        out = np.zeros(self.shape, dtype=mask.dtype)
+        out[self._on] = mask[self._rows, self._cols]
+        return out
 
     def point(self, line: int, pos: int) -> Point:
-        if self.direction == "x":
-            return self.grid.centre(line, pos)
-        return self.grid.centre(pos, line)
+        if not self.turned:
+            return self.grid.centre(line, pos) if self.angle == 0.0 else self.grid.centre(pos, line)
+        return (float(self._x[line, pos]), float(self._y[line, pos]))
+
+    def clear_cells(self, clearance: Clearance, allowed: np.ndarray, need: float) -> np.ndarray:
+        """Turned frames: the cells seen as `allowed` whose own centre keeps `need` from every
+        obstacle. The centre of a turned cell is not the centre of the map cell it falls in, so the
+        map cell's clearance alone could be up to 0.7 of a cell too generous."""
+        out = self.view(allowed)
+        lines, positions = np.nonzero(out)
+        points = np.stack([self._x[lines, positions], self._y[lines, positions]], axis=1)
+        for lo in range(0, len(points), 2048):  # in parts: each point is weighed against every cell near it
+            near = clearance.of_points(points[lo:lo + 2048]) >= need - _EPS
+            out[lines[lo:lo + 2048], positions[lo:lo + 2048]] = near
+        return out
 
 
 @dataclass(frozen=True)
@@ -189,8 +266,7 @@ def make_plan(grid: Grid, robot: Point, settings: Settings, options: Options, ar
     started = time.perf_counter()
     s = settings
     res = grid.resolution
-    if options.direction not in ("auto", "x", "y"):
-        raise ValueError(f"unknown row direction '{options.direction}'")
+    angle = parse_direction(options.direction)  # ValueError for a direction that is none
     if options.passes not in (1, 2):
         raise ValueError("passes must be 1 or 2")
 
@@ -229,7 +305,7 @@ def make_plan(grid: Grid, robot: Point, settings: Settings, options: Options, ar
 
     ctx = _Context(grid, s, clearance, row_ok, travel, reachable_floor)
     labels = _split(reach & inside, clearance_field(grid.floor, res, _PART_CAP), _PART_NECK)
-    pieces, directions, order = ctx.plan(labels, robot, start, options, reach, rows_inside)
+    pieces, directions, order = ctx.plan(labels, robot, start, options, angle, reach, rows_inside)
 
     pieces = _number(pieces)
     planned = cleaned_by(grid, pieces, half) & grid.floor & inside
@@ -251,10 +327,22 @@ class _Context:
         self.planned = planned
         self.spacing = max(1, int(round(s.row_spacing / self.res)))
         self.half = s.cleaning_width / 2.0
+        self._frames: Dict[float, _Frame] = {}
+
+    def _frame(self, angle: float) -> _Frame:
+        frame = self._frames.get(angle)
+        if frame is None:
+            frame = _Frame(self.grid, angle)
+            if frame.turned:
+                frame.clear = frame.clear_cells(self.clearance, self.row_ok, self.s.row_clearance)
+            self._frames[angle] = frame
+        return frame
 
     # ---------------------------------------------------------- part by part
-    def plan(self, labels: np.ndarray, robot: Point, start: Tuple[int, int], options: Options, reach, rows_inside):
-        """(pieces, row direction of each pass, the parts in the order cleaned)."""
+    def plan(self, labels: np.ndarray, robot: Point, start: Tuple[int, int], options: Options, angle: Optional[float],
+             reach, rows_inside):
+        """(pieces, row direction of each pass, the parts in the order cleaned). `angle`: the rows'
+        direction in degrees, or None for x or y, whichever suits each part."""
         row_labels = np.where(self.row_ok, labels, 0)
         floor_labels = np.where(self.planned, _nearest_label(row_labels, self.half, self.res), 0)
         parts = _PartMap(self.grid, labels, self.row_ok, robot, start)
@@ -267,7 +355,7 @@ class _Context:
 
         pieces: List[Piece] = []
         here = robot
-        used: Dict[int, List[str]] = {1: [], 2: []}
+        used: Dict[int, List[float]] = {1: [], 2: []}
         regions = {1: 0, 2: 0}
         elsewhere = np.zeros(self.grid.shape, dtype=bool)  # floor cleaned in the parts before this one
         for k, p in enumerate(order):
@@ -285,9 +373,9 @@ class _Context:
                     pieces += new
                     continue
                 if stage == 1:
-                    choices = ("x", "y") if options.direction == "auto" else (options.direction,)
+                    choices = (0.0, 90.0) if angle is None else (angle,)
                 else:
-                    choices = ("y" if first == "x" else "x",)
+                    choices = ((first + 90.0) % 180.0,)
                 # Leaving an edge (at edge_clearance), the hop to the first row may keep that clearance too.
                 lead = self.s.edge_clearance if pieces and pieces[-1].kind == EDGE else self.s.row_clearance
                 tries = [self._pass(d, ok, floor & ~covered, here, aim, stage, regions[stage], lead) for d in choices]
@@ -301,10 +389,10 @@ class _Context:
         directions = []
         for stage in range(1, options.passes + 1):
             kinds = sorted(set(used[stage]))
-            directions.append(kinds[0] if len(kinds) == 1 else "mixed" if kinds else "")
+            directions.append(direction_name(kinds[0]) if len(kinds) == 1 else "mixed" if kinds else "")
         return pieces, directions, order
 
-    def _score(self, pieces: List[Piece], end: Point, aim: Optional[Point], direction: str):
+    def _score(self, pieces: List[Piece], end: Point, aim: Optional[Point], direction: float):
         """Which of two passes over a part is better: fewer turns and transits, then less time
         (the trip on to the next part included), then x before y."""
         s = self.s
@@ -315,12 +403,12 @@ class _Context:
         return (turns + _count(pieces, TRANSIT), round(seconds, 6), direction)
 
     # ---------------------------------------------------------- rows of one pass over one part
-    def _pass(self, direction: str, ok: np.ndarray, floor: np.ndarray, here: Point, aim: Optional[Point],
+    def _pass(self, direction: float, ok: np.ndarray, floor: np.ndarray, here: Point, aim: Optional[Point],
               pass_number: int, region: int, lead: float):
         """(pieces, where the robot ends, direction, last region number) for one pass over the
         row-clear cells `ok` of one part, to clean `floor`. `lead`: the clearance the hop to the
         first row needs to be a connector."""
-        frame = _Frame(self.grid, direction)
+        frame = self._frame(direction)
         rows = self._rows(frame, ok, floor)
         chains = _chains(rows, self.spacing)
         ways = [[(frame.point(legs[0][0].line, legs[0][1]), frame.point(legs[-1][0].line, legs[-1][2]), legs)
@@ -352,6 +440,8 @@ class _Context:
         rows between are spread evenly at no more than row_spacing. A fixed grid of lines instead
         can fall up to a whole spacing short of an edge, and misses places narrower than a spacing."""
         ok = frame.view(row_ok)
+        if frame.clear is not None:
+            ok = ok & frame.clear
         reach = frame.view(floor)
         min_steps = int(math.ceil(self.s.min_row_length / self.res - _EPS))
         lines = np.flatnonzero(ok.any(axis=1))
@@ -379,8 +469,10 @@ class _Context:
     def _drop_needless(self, shape, rows: List[_Row], reach: np.ndarray) -> List[_Row]:
         """Leave out rows that clean nothing (of `reach`) that the other rows do not clean: where
         two regions' edge rows lie side by side, or where the edge pass cleans along a wall. One at
-        a time, shortest first, as each one left out can make another one needed."""
-        bands = [np.flatnonzero((self._band(shape, r) & reach).ravel()) for r in rows]
+        a time, shortest first, as each one left out can make another one needed. Here a row cleans
+        only out to half a row spacing (and _NEEDLESS_MARGIN) from its line, so close rows stay."""
+        radius = min(self.half, self.s.row_spacing / 2.0 + _NEEDLESS_MARGIN)
+        bands = [np.flatnonzero((self._band(shape, r, radius) & reach).ravel()) for r in rows]
         count = np.zeros(shape[0] * shape[1], dtype=np.int32)
         for b in bands:
             count[b] += 1
@@ -391,16 +483,17 @@ class _Context:
                 count[bands[i]] -= 1
         return [r for r, k in zip(rows, keep) if k]
 
-    def _band(self, shape, row: _Row) -> np.ndarray:
-        """Cells (frame view) within half a cleaning width of the row."""
-        k = int(math.floor(self.half / self.res + _EPS))
+    def _band(self, shape, row: _Row, radius: Optional[float] = None) -> np.ndarray:
+        """Cells (frame view) within `radius` (half a cleaning width) of the row."""
+        radius = self.half if radius is None else radius
+        k = int(math.floor(radius / self.res + _EPS))
         out = np.zeros(shape, dtype=bool)
         l0, l1 = max(row.line - k, 0), min(row.line + k, shape[0] - 1)
         p0, p1 = max(row.a - k, 0), min(row.b + k, shape[1] - 1)
         ll, pp = np.mgrid[l0:l1 + 1, p0:p1 + 1]
         dl = (ll - row.line) * self.res
         dp = np.maximum(np.maximum(row.a - pp, pp - row.b), 0) * self.res
-        out[ll, pp] = dl * dl + dp * dp <= self.half * self.half + 1e-12
+        out[ll, pp] = dl * dl + dp * dp <= radius * radius + 1e-12
         return out
 
     def _best_extra_row(self, ok: np.ndarray, uncovered: np.ndarray, min_steps: int):
@@ -532,8 +625,8 @@ class _Context:
         hugging = clear < s.edge_clearance + 1.5 * res  # next to something real, not just the area's border
         min_steps = int(math.ceil(s.min_edge_length / res - _EPS))
         segments: List[Tuple[Point, Point]] = []
-        for direction in ("x", "y"):
-            frame = _Frame(self.grid, direction)
+        for direction in (0.0, 90.0):  # edges follow walls: along the map's own axes whatever the rows do
+            frame = self._frame(direction)
             ok = frame.view(edge_ok)
             hug = frame.view(hugging)
             above = np.zeros_like(ok)

@@ -1,0 +1,7 @@
+# Split the map in use into rooms at its doorways: /rooms/find, served by the rooms node. Nothing is
+# saved: the answer is a proposal (with the names of matching saved rooms kept; new ones are
+# "Room 1", "Room 2", ...). Takes about a second.
+---
+bool success
+string message
+Room[] rooms

@@ -18,7 +18,15 @@ it gives to a phone that connects late. The robot works the same whether or not 
     GoTo             -> compute_path_to_pose (is there a route?), then
                         navigate_to_pose (nav2_msgs/action/NavigateToPose)  -> Reply with the goal's id
     CancelGoal       -> navigate_to_pose/_action/cancel_goal               -> Reply
-    Drive            -> /cmd_vel (geometry_msgs/msg/Twist), one phone at a time -> Reply at once
+    Drive            -> /cmd_vel (geometry_msgs/msg/Twist), one phone at a time -> Reply at once;
+                        held to the joystick speed in /robot_settings
+    /robot_settings  vacuum_interfaces/msg/RobotSettings -> RobotSettings  (on change)
+    SetRobotSettings -> /set_robot_settings (vacuum_interfaces/srv/SetRobotSettings) -> Reply
+    /rooms           vacuum_interfaces/msg/Rooms         -> Rooms          (on change)
+    FindRooms, SetRooms -> /rooms/find, /rooms/set (the rooms node) -> Reply (with the rooms found)
+    /assistant/status  vacuum_interfaces/msg/AssistantStatus -> AssistantStatus (on change, 2 a second)
+    AskAssistant     -> /assistant/ask (vacuum_interfaces/srv/AskAssistant) -> Reply with the answer
+    NameRooms        -> /assistant/name_rooms (vacuum_interfaces/srv/NameRooms) -> Reply with the rooms named
     /cleaning/status   vacuum_interfaces/msg/CleaningStatus -> CleaningStatus (on change, 2 a second)
     /cleaning/plan     vacuum_interfaces/msg/CleaningPlan   -> CleaningPlan   (on change)
     /cleaning/cleaned  nav_msgs/msg/OccupancyGrid           -> CleanedArea    (at most 1 a second)
@@ -65,9 +73,11 @@ from rclpy.time import Time
 from std_srvs.srv import Trigger
 from tf2_ros import Buffer, TransformException, TransformListener
 
-from vacuum_interfaces.msg import CleaningJob, CleaningPlan, CleaningStatus, ExplorationStatus, NoGoZone, RobotState, SafetyStatus
-from vacuum_interfaces.srv import (ChangeState, DeleteCleaningPlan, GetCleaningRecord, ListCleaningHistory, ListCleaningPlans,
-                                   PreviewCleaning, SaveCleaningPlan, SaveMap, SetNoGoZones, StartCleaning, StartExploration)
+from vacuum_interfaces.msg import (AssistantStatus, CleaningJob, CleaningPlan, CleaningStatus, ExplorationStatus, NoGoZone, Room,
+                                   Rooms, RobotSettings, RobotState, SafetyStatus)
+from vacuum_interfaces.srv import (AskAssistant, ChangeState, DeleteCleaningPlan, FindRooms, GetCleaningRecord, ListCleaningHistory,
+                                   ListCleaningPlans, NameRooms, PreviewCleaning, SaveCleaningPlan, SaveMap, SetNoGoZones,
+                                   SetRobotSettings, SetRooms, StartCleaning, StartExploration)
 
 # Imported before anything generated: say clearly what is wrong if the pip packages are missing.
 from . import requirements
@@ -98,6 +108,12 @@ SET_ZONES_TIMEOUT = 20.0
 START_CLEANING_TIMEOUT = 20.0
 CLEANING_CALL_TIMEOUT = 20.0  # preview, save, list, delete, history, one record: planning is the slowest, under 1 s
 START_EXPLORATION_TIMEOUT = 10.0  # the exploration node answers at once, before the robot changes mode
+SET_SETTINGS_TIMEOUT = 10.0  # the settings node checks and writes a small file
+FIND_ROOMS_TIMEOUT = 20.0  # splitting a map takes well under a second
+SET_ROOMS_TIMEOUT = 10.0
+# The assistant answers in seconds, but waits for the robot when asked to go somewhere (minutes).
+ASK_TIMEOUT = 600.0
+NAME_ROOMS_TIMEOUT = 900.0  # a drive to every room, and a look in each
 
 
 POSE_PERIOD = 0.1  # s between robot positions (computer's clock)
@@ -128,6 +144,12 @@ def make_streams():
         pb.DATA_NAVIGATION: Stream("the navigation status", repeat_interval=2.0, replay_max_age=None, min_interval=0.5),
         # The no-go zones go out when the map in use or its zones file changes; a late phone always gets them.
         pb.DATA_NO_GO_ZONES: Stream("the no-go zones", repeat_interval=None, replay_max_age=None),
+        # The settings go out when they change; a late phone always gets them.
+        pb.DATA_ROBOT_SETTINGS: Stream("the settings", repeat_interval=None, replay_max_age=None),
+        # The rooms go out when they change; a late phone always gets them.
+        pb.DATA_ROOMS: Stream("the rooms", repeat_interval=None, replay_max_age=None),
+        # The assistant's status like the cleaning status: a late phone gets it only while fresh.
+        pb.DATA_ASSISTANT_STATUS: Stream("the assistant status", repeat_interval=0.4, replay_max_age=2.0),
         # Cleaning: the status like the robot state (the cleaning node publishes it twice a second,
         # job or not); the rows on change; the cleaned area at most once a second. A late phone gets
         # all three, so a phone that connects in the middle of a clean sees it at once.
@@ -269,13 +291,79 @@ def make_commands(node, executor, loop, driver: drive.DriverLock):
         return Result.RESULT_REFUSED, "navigation refused to cancel"
 
     async def drive_robot(message, phone):
-        speeds = drive.clamp_speeds(message.forward, message.turn)
+        speeds = drive.clamp_speeds(message.forward, message.turn, *node.manual_limits)
         if speeds is None:
             return Result.RESULT_BAD_REQUEST, "the speeds are not numbers"
         if not driver.claim(phone, loop.time()):
             return Result.RESULT_REFUSED, "another phone is driving the robot"
         node.publish_drive(*speeds)
         return Result.RESULT_OK, ""
+
+    async def set_settings(message):
+        wanted = message.settings
+        values = (wanted.cleaning_speed, wanted.manual_speed, wanted.row_spacing, wanted.row_angle)
+        if not all(math.isfinite(v) for v in values):
+            return Result.RESULT_BAD_REQUEST, "a setting is not a number"
+        if not node.set_settings.service_is_ready():
+            return Result.RESULT_NOT_AVAILABLE, "the settings node is not running (no /set_robot_settings service)"
+        request = SetRobotSettings.Request()
+        convert.fill_robot_settings(wanted, request.settings)
+        response = await ros_call(executor, node.set_settings, request, loop)
+        return (Result.RESULT_OK if response.success else Result.RESULT_REFUSED), response.message
+
+    def ros_room(fields) -> Room:
+        return Room(name=fields["name"], outline=Polygon(points=[Point32(x=x, y=y, z=0.0) for x, y in fields["outline"]]),
+                    x=fields["x"], y=fields["y"], area=fields["area"])
+
+    def rooms_from_phone(phone_rooms):
+        out = []
+        for r in phone_rooms:
+            fields = convert.room_fields(r)
+            if not all(math.isfinite(v) for p in fields["outline"] for v in p) or len(fields["outline"]) < 3:
+                return None, f"the room '{fields['name']}' has no outline"
+            out.append(ros_room(fields))
+        return out, ""
+
+    async def find_rooms(_message):
+        if not node.find_rooms.service_is_ready():
+            return Result.RESULT_NOT_AVAILABLE, "the rooms node is not running (no /rooms/find service)"
+        response = await ros_call(executor, node.find_rooms, FindRooms.Request(), loop)
+        if not response.success:
+            return Result.RESULT_REFUSED, response.message
+        return Result.RESULT_OK, response.message, {"rooms": convert.rooms(response.rooms, node.map_in_use)}
+
+    async def set_rooms(message):
+        new, problem = rooms_from_phone(message.rooms)
+        if new is None:
+            return Result.RESULT_BAD_REQUEST, problem
+        if not node.set_rooms.service_is_ready():
+            return Result.RESULT_NOT_AVAILABLE, "the rooms node is not running (no /rooms/set service)"
+        response = await ros_call(executor, node.set_rooms, SetRooms.Request(map_name=message.map_name.strip(), rooms=new), loop)
+        return (Result.RESULT_OK if response.success else Result.RESULT_REFUSED), response.message
+
+    async def ask_assistant(message):
+        if not message.text.strip():
+            return Result.RESULT_BAD_REQUEST, "nothing was asked"
+        if not node.ask.service_is_ready():
+            return Result.RESULT_NOT_AVAILABLE, "the assistant is not running (no /assistant/ask service)"
+        request = AskAssistant.Request(conversation=message.conversation.strip() or "phone", text=message.text)
+        response = await ros_call(executor, node.ask, request, loop)
+        answer = convert.assistant_answer(response)
+        result = Result.RESULT_OK if response.success else Result.RESULT_REFUSED
+        return result, "" if response.success else response.reply, {"answer": answer}
+
+    async def name_rooms(message):
+        new, problem = rooms_from_phone(message.rooms)
+        if new is None:
+            return Result.RESULT_BAD_REQUEST, problem
+        if not new:
+            return Result.RESULT_BAD_REQUEST, "no rooms to name: find the rooms first"
+        if not node.name_rooms.service_is_ready():
+            return Result.RESULT_NOT_AVAILABLE, "the assistant is not running (no /assistant/name_rooms service)"
+        response = await ros_call(executor, node.name_rooms, NameRooms.Request(rooms=new), loop)
+        if not response.success:
+            return Result.RESULT_REFUSED, response.message
+        return Result.RESULT_OK, response.message, {"rooms": convert.rooms(response.rooms, node.map_in_use)}
 
     async def start_exploration(message):
         if not math.isfinite(message.time_limit) or message.time_limit < 0:
@@ -296,6 +384,11 @@ def make_commands(node, executor, loop, driver: drive.DriverLock):
         pb.COMMAND_SET_NO_GO_ZONES: Command("set no-go zones", pb.SetNoGoZones, SET_ZONES_TIMEOUT,
                                             zones.set_zones_command(save_zones, send_zones_now)),
         pb.COMMAND_DRIVE: Command("drive", pb.Drive, DRIVE_TIMEOUT, drive_robot, with_phone=True),
+        pb.COMMAND_SET_ROBOT_SETTINGS: Command("set settings", pb.SetRobotSettings, SET_SETTINGS_TIMEOUT, set_settings),
+        pb.COMMAND_FIND_ROOMS: Command("find rooms", pb.FindRooms, FIND_ROOMS_TIMEOUT, find_rooms),
+        pb.COMMAND_SET_ROOMS: Command("set rooms", pb.SetRooms, SET_ROOMS_TIMEOUT, set_rooms),
+        pb.COMMAND_ASK_ASSISTANT: Command("ask the assistant", pb.AskAssistant, ASK_TIMEOUT, ask_assistant),
+        pb.COMMAND_NAME_ROOMS: Command("name rooms", pb.NameRooms, NAME_ROOMS_TIMEOUT, name_rooms),
         pb.COMMAND_GO_TO: Command("go to", pb.GoTo, GO_TO_TIMEOUT, go_to),
         pb.COMMAND_CANCEL_GOAL: Command("cancel goal", pb.CancelGoal, CANCEL_TIMEOUT, cancel_goal),
     }
@@ -412,6 +505,8 @@ class RobotSide(Node):
         self.declare_parameter("maps_dir", "")  # where the saved maps and their zones files are
         self.forward = None
         self.mode = ""  # the robot's mode, from /robot_state
+        # The joystick's top speeds (m/s, rad/s), from /robot_settings; the base's own until they arrive.
+        self.manual_limits = (drive.MAX_FORWARD, drive.MAX_TURN)
         self._heard = set()
         latched = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL)
         self.create_subscription(RobotState, "robot_state", self._on_robot_state, latched)
@@ -420,6 +515,16 @@ class RobotSide(Node):
         self.change_state = self.create_client(ChangeState, "change_state")
         self.save_map = self.create_client(SaveMap, "save_map")
         self.set_zones = self.create_client(SetNoGoZones, "set_no_go_zones")
+        self.create_subscription(RobotSettings, "robot_settings", self._on_settings, latched)
+        self.set_settings = self.create_client(SetRobotSettings, "set_robot_settings")
+        # Rooms, and the assistant.
+        self.map_in_use = ""
+        self.create_subscription(Rooms, "rooms", self._on_rooms, latched)
+        self.find_rooms = self.create_client(FindRooms, "rooms/find")
+        self.set_rooms = self.create_client(SetRooms, "rooms/set")
+        self.create_subscription(AssistantStatus, "assistant/status", self._on_assistant_status, 10)
+        self.ask = self.create_client(AskAssistant, "assistant/ask")
+        self.name_rooms = self.create_client(NameRooms, "assistant/name_rooms")
         # Driving by hand: the same input the keyboard uses. The safety gate decides whether it moves the robot.
         self._drive_pub = self.create_publisher(Twist, "cmd_vel", 1)
         # Navigation: any goal's progress (status, feedback, route), and the means to send and cancel.
@@ -492,6 +597,24 @@ class RobotSide(Node):
         in_use = "" if msg.making_map else msg.current_map
         if self._map_zones is not None and self._map_zones.follow(in_use):
             self.send_zones()  # the new map's zones at once, not at the next look
+
+    def _on_settings(self, msg):
+        self._first("robot_settings")
+        settings = convert.robot_settings(msg)
+        if math.isfinite(settings.manual_speed) and math.isfinite(settings.manual_turn_speed) and settings.manual_speed > 0.0:
+            self.manual_limits = (settings.manual_speed, settings.manual_turn_speed)
+        if self.forward is not None:
+            self.forward(pb.DATA_ROBOT_SETTINGS, settings.SerializeToString())
+
+    def _on_rooms(self, msg):
+        self._first("rooms")
+        self.map_in_use = msg.map_name
+        if self.forward is not None:
+            self.forward(pb.DATA_ROOMS, convert.rooms(msg.rooms, msg.map_name).SerializeToString())
+
+    def _on_assistant_status(self, msg):
+        if self.forward is not None:
+            self.forward(pb.DATA_ASSISTANT_STATUS, convert.assistant_status(msg).SerializeToString())
 
     def _on_safety_status(self, msg):
         self._first("safety_status")

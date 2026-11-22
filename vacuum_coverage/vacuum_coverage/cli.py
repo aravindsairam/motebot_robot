@@ -4,7 +4,7 @@
     ros2 run vacuum_coverage clean --area 1.2 0.2 3.2 1.4   clean a rectangle (map metres: x0 y0 x1 y1)
     ros2 run vacuum_coverage clean --spot 2.0 1.0           clean a square around a point
     ros2 run vacuum_coverage clean --plan "Living room"     run a saved plan
-        options: --stay (do not dock afterwards)  --passes 2  --edges / --no-edges  --direction x|y|auto
+        options: --stay (do not dock afterwards)  --passes 2  --edges / --no-edges  --direction auto|x|y|DEGREES
         It starts the job and follows it until it ends; Ctrl-C stops the clean (asks for idle).
     ros2 run vacuum_coverage preview [same arguments]       the estimate, and the rows on /cleaning/plan
     ros2 run vacuum_coverage pause | resume
@@ -18,6 +18,7 @@
 """
 
 import argparse
+import dataclasses
 import datetime
 import os
 import sys
@@ -30,7 +31,8 @@ def _job_arguments(parser: argparse.ArgumentParser) -> None:
     where.add_argument("--area", nargs=4, type=float, metavar=("X0", "Y0", "X1", "Y1"), help="a rectangle, map metres")
     where.add_argument("--spot", nargs=2, type=float, metavar=("X", "Y"), help="a square around this point")
     where.add_argument("--plan", metavar="NAME", help="a saved plan")
-    parser.add_argument("--direction", choices=("auto", "x", "y"), default="auto")
+    parser.add_argument("--direction", default="", metavar="auto|x|y|DEGREES",
+                        help="which way the rows run (default: the robot's setting)")
     parser.add_argument("--passes", type=int, choices=(1, 2), default=1)
     edges = parser.add_mutually_exclusive_group()
     edges.add_argument("--edges", dest="edges", action="store_true", default=None, help="a pass along walls and furniture")
@@ -293,6 +295,8 @@ def plan_picture_main(argv=None):
     m = mapdata.load(map_yaml, map_files.read_zones(args.zones or map_files.zones_path_for(map_yaml)))
     settings = Settings()
     spec = _spec(args)
+    if not spec.direction:  # no robot here to ask for its setting
+        spec = dataclasses.replace(spec, direction="auto")
     why = spec.check()
     if why or spec.what == "plan":
         print(why or "plan_picture cannot read saved plans; use --area, --spot or nothing")

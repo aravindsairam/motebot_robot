@@ -5,6 +5,8 @@ A saved map is two files, as Nav2's map_server expects:
     <name>.yaml   resolution, origin, and the image file name
 and, next to them, files that belong to it and are named after it:
     <name>_zones.yaml     its no-go zones (none if the file is missing)
+    <name>_rooms.yaml     its rooms (none if the file is missing)
+    <name>_things.yaml    things the robot has seen on it (a sofa, a bed), with where
     <name>_keepout.*      Nav2's keepout mask, made from the zones each time it is needed
 Every package finds these files through the functions here, so all of them use the same names.
 """
@@ -35,19 +37,29 @@ Pose2D = Tuple[float, float, float]  # x, y, yaw
 _MAP_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 # A map's own files end in these, so no map may: its .yaml would then be another map's zones or
 # mask, and saving it would overwrite them.
-_RESERVED_ENDINGS = ("_keepout", "_zones")
+_RESERVED_ENDINGS = ("_keepout", "_zones", "_rooms", "_things")
 
 
 def map_name_problem(name: str) -> str:
     """Why `name` cannot be a map's name, or "" if it can."""
     if not _MAP_NAME.match(name) or name.endswith(_RESERVED_ENDINGS):
-        return "map names may use letters, digits, '-' and '_', and must not end in '_keepout' or '_zones'"
+        return "map names may use letters, digits, '-' and '_', and must not end in '_keepout', '_zones', '_rooms' or '_things'"
     return ""
 
 
 def zones_path(maps_dir: str, map_name: str) -> str:
     """The file with a saved map's no-go zones. A map without one has no zones."""
     return os.path.join(maps_dir, map_name + "_zones.yaml")
+
+
+def rooms_path(maps_dir: str, map_name: str) -> str:
+    """The file with a saved map's rooms. A map without one has no rooms yet."""
+    return os.path.join(maps_dir, map_name + "_rooms.yaml")
+
+
+def things_path(maps_dir: str, map_name: str) -> str:
+    """The file of things the robot has seen on a saved map, and where."""
+    return os.path.join(maps_dir, map_name + "_things.yaml")
 
 
 def zones_path_for(map_yaml: str) -> str:

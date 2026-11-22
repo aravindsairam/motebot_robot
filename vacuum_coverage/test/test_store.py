@@ -153,3 +153,19 @@ def test_a_saved_plan_keeps_its_coordinates_exactly(tmp_path):
     s = store(tmp_path)
     s.save_plan("Exact", JOB, exact, ESTIMATE, "a")
     assert s.load_plan("Exact").pieces == exact
+
+
+def test_the_cleaned_floor_is_kept_with_the_record_and_pruned_with_it(tmp_path):
+    import numpy as np
+
+    s = store(tmp_path, size=2)
+    mask = np.zeros((7, 11), dtype=bool)
+    mask[1:3, 2:9] = True
+    rid = s.add_record(record(1), b"png", cleaned=mask)
+    assert (s.cleaned(rid) == mask).all() and s.cleaned(rid).shape == (7, 11)
+    old = s.add_record(record(2), b"png")  # a record without one, as before this was kept
+    assert s.cleaned(old) is None
+    s.add_record(record(3), b"png", cleaned=mask)
+    s.add_record(record(4), b"png", cleaned=mask)
+    assert not os.path.exists(os.path.join(s.records_dir, rid + "_cleaned.png"))  # dropped with its record
+    assert s.cleaned("../../etc") is None
