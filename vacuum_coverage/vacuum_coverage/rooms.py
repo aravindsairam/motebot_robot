@@ -3,14 +3,18 @@ named by the user or by the robot. No ROS imports.
 
 Finding them uses the same split as the cleaning planner (planner._split): a watershed on the
 distance from the walls, where a passage much narrower than the rooms on both sides (a doorway)
-keeps them apart. Then:
-  1. every floor cell joins the part of the nearest place the robot can stand;
-  2. parts with less floor than `min_area` (a nook behind a narrow gap, the space under a table) join
-     the neighbour they share the longest border with;
-  3. where two rooms meet, the border is moved onto the doorway between them: a gap in a straight
-     wall line (see _doorways). The split alone puts it where the two floods met, which can be well
-     inside one room (a dining corner fenced off by chairs joined the kitchen through a wide arch);
-  4. each room gets an outline (a polygon around its floor), its most open spot (where the robot goes
+keeps them apart. Around it:
+  1. furniture standing free on the floor (legs, a sofa, stray dots on the map: see _furniture)
+     counts as floor while the rooms are found, so that only the walls shape them;
+  2. every floor cell joins the part of the nearest place the robot can stand;
+  3. parts with less floor than `min_area` (a nook behind a narrow gap) join the neighbour they
+     share the longest border with;
+  4. doorways are looked for: gaps in straight wall lines, whichever way the map is turned (see
+     _doorways). A doorway inside one part that cuts it into two rooms makes two of it (a hallway
+     as narrow as its doors is not kept apart by the split alone), and where two rooms meet, the
+     border is moved onto the doorway between them (the split alone puts it where the two floods
+     met, which can be well inside one room);
+  5. each room gets an outline (a polygon around its floor), its most open spot (where the robot goes
      to visit it: just inside its widest doorway, see _entry_spot) and its floor area.
 
 The file, next to the map (map_files.rooms_path):
@@ -35,6 +39,10 @@ MIN_AREA = 2.0  # m2: less floor than this is not a room of its own
 NECK = 0.7  # rooms split where a passage is narrower than this times the smaller room's widest place
 DOOR_WIDTH = (0.5, 2.0)  # m: a gap this wide in a straight wall line can be a doorway or an arch
 DOOR_WALL = 0.4  # m of wall on each side of it, in line
+FURNITURE = 4.0  # m2: a thing standing free on the floor, up to this big, is furniture and not a wall,
+WALL = (0.4, 3.0)  # unless it is long and thin like a wall: at least this long (m), and this many times longer than thick
+HALLWAY = 0.5  # m: walls that run on this far from both ends of a gap, to one side, make it a stretch of hallway
+STRAIGHT = 0.25  # degrees: walls turned less than this from the map's rows and columns are along them
 MAX_ROOMS = 30
 MAX_NAME = 40
 STAND_CLEARANCE = 0.20  # m from the walls where the robot can stand: its radius and a little more
@@ -66,10 +74,12 @@ def find(grid: Grid, min_area: float = MIN_AREA, walls: Optional[np.ndarray] = N
     occupied cells of the map, for finding doorways (without it the borders are not moved)."""
     res = grid.resolution
     cell_area = res * res
-    height = clearance_field(grid.floor, res, _PART_CAP)
+    furniture = _furniture(grid.floor, res)
+    ground = grid.floor | furniture  # the floor the walls alone leave: this is what is split into rooms
+    height = clearance_field(ground, res, _PART_CAP)
     stand = height >= STAND_CLEARANCE - 1e-9
     parts = _split(stand, height, NECK)
-    floor_parts = np.where(grid.floor, _nearest_label(parts, STAND_CLEARANCE + 2 * res, res), 0)
+    floor_parts = np.where(ground, _nearest_label(parts, STAND_CLEARANCE + 2 * res, res), 0)
 
     # Small parts join the neighbour they share the longest border with, smallest first.
     while True:
@@ -83,14 +93,15 @@ def find(grid: Grid, min_area: float = MIN_AREA, walls: Optional[np.ndarray] = N
         if borders:
             target = max(borders.items(), key=lambda kv: (kv[1], -kv[0]))[0]
             floor_parts[mask] = target
-            parts[parts == part] = target
         else:
             floor_parts[mask] = 0  # alone and too small: a cupboard, not a room
-            parts[parts == part] = 0
 
     if walls is not None:
-        floor_parts = _borders_at_doorways(floor_parts, grid, walls, min_area)
-        parts = np.where(stand, floor_parts, 0)
+        floor_parts = _at_doorways(floor_parts, ground, res, walls & ~furniture, min_area)
+    floor_parts = np.where(grid.floor, floor_parts, 0)
+    height = clearance_field(grid.floor, res, _PART_CAP)  # from here on: where the robot can really stand
+    stand = height >= STAND_CLEARANCE - 1e-9
+    parts = np.where(stand, floor_parts, 0)
 
     rooms: List[Room] = []
     for part in np.unique(floor_parts[floor_parts > 0]).tolist():
@@ -114,6 +125,30 @@ def find(grid: Grid, min_area: float = MIN_AREA, walls: Optional[np.ndarray] = N
     for i, room in enumerate(rooms, start=1):
         room.name = f"Room {i}"
     return rooms
+
+
+def _furniture(floor: np.ndarray, res: float) -> np.ndarray:
+    """The cells that are not floor but stand free on it: table and chair legs, a sofa, a kitchen
+    island, a patch the robot never saw into, stray dots on the map. Each is a group of cells that
+    touches neither the walls around the home nor the edge of the map, is at most FURNITURE big, and
+    is not long and thin like a piece of wall with a door at each end (WALL)."""
+    import cv2
+
+    h, w = floor.shape
+    count, comp, stats, _ = cv2.connectedComponentsWithStats((~floor).astype(np.uint8), connectivity=8)
+    out = np.zeros_like(floor)
+    for i in range(1, count):
+        x, y, bw, bh, cells = (int(v) for v in stats[i])
+        if x == 0 or y == 0 or x + bw == w or y + bh == h or cells * res * res > FURNITURE:
+            continue
+        piece = comp[y:y + bh, x:x + bw] == i
+        if math.hypot(bw, bh) * res >= WALL[0]:  # long enough to be a wall: is it thin as well?
+            long_side = max(cv2.minAreaRect(np.argwhere(piece).astype(np.float32))[1]) + 1
+            thick = 2.0 * float(cv2.distanceTransform(np.pad(piece, 1).astype(np.uint8), cv2.DIST_L2, 5).max())
+            if long_side * res >= WALL[0] and long_side >= WALL[1] * thick:
+                continue
+        out[y:y + bh, x:x + bw] |= piece
+    return out
 
 
 def _entry_spot(cells: np.ndarray, labels: np.ndarray, part: int, height: np.ndarray, grid: Grid) -> Optional[Tuple[int, int]]:
@@ -149,12 +184,68 @@ def _entry_spot(cells: np.ndarray, labels: np.ndarray, part: int, height: np.nda
 
 
 def _doorways(walls: np.ndarray, floor: np.ndarray, res: float) -> List[Tuple[np.ndarray, np.ndarray]]:
-    """Gaps in straight wall lines: along a row or a column of the map, a stretch of floor between
-    two runs of wall each at least DOOR_WALL long, the stretch DOOR_WIDTH wide. Each as the (rows,
-    columns) of its cells."""
+    """Gaps in straight wall lines (see _wall_gaps), each as the (rows, columns) of its cells. A map
+    whose walls do not run along its rows and columns (the robot started it askew) is turned
+    straight first, at twice the detail, and the gaps found there are laid back onto the map."""
+    import cv2
+
+    turn = _turn_to_straighten(walls)
+    if abs(turn) < STRAIGHT:
+        return _wall_gaps(walls, floor, res)
+    h, w = walls.shape
+    scale = 2
+    side = scale * int(math.ceil(math.hypot(h, w))) + 4
+    to_sheet = cv2.getRotationMatrix2D(((w - 1) / 2, (h - 1) / 2), turn, scale)
+    to_sheet[:, 2] += ((side - 1) / 2 - (w - 1) / 2, (side - 1) / 2 - (h - 1) / 2)
+    sheet_walls = cv2.warpAffine(walls.astype(np.uint8), to_sheet, (side, side), flags=cv2.INTER_NEAREST)
+    sheet_walls = cv2.dilate(sheet_walls, np.ones((3, 3), np.uint8)).astype(bool)  # no pinholes where a turned wall steps
+    sheet_floor = cv2.warpAffine(floor.astype(np.uint8), to_sheet, (side, side), flags=cv2.INTER_NEAREST).astype(bool)
+    back = cv2.invertAffineTransform(to_sheet)
+    found = []
+    for rows, cols in _wall_gaps(sheet_walls, sheet_floor & ~sheet_walls, res / scale):
+        n = len(rows) + 2 * scale  # one map cell more at each end, into the wall
+        ys = np.linspace(rows[0] - scale * np.sign(rows[-1] - rows[0]), rows[-1] + scale * np.sign(rows[-1] - rows[0]), n)
+        xs = np.linspace(cols[0] - scale * np.sign(cols[-1] - cols[0]), cols[-1] + scale * np.sign(cols[-1] - cols[0]), n)
+        map_cols = np.rint(back[0, 0] * xs + back[0, 1] * ys + back[0, 2]).astype(int)
+        map_rows = np.rint(back[1, 0] * xs + back[1, 1] * ys + back[1, 2]).astype(int)
+        inside = (map_rows >= 0) & (map_rows < h) & (map_cols >= 0) & (map_cols < w)
+        if inside.any():
+            found.append((map_rows[inside], map_cols[inside]))
+    return found
+
+
+def _turn_to_straighten(walls: np.ndarray) -> float:
+    """The turn, in degrees from -45 to 45, that lays the walls along the rows and columns of the
+    picture: the one after which the wall cells fall into the fewest rows and columns (the sum of
+    the squared counts per row and per column is then the largest). 0 for a map with no walls."""
+    import cv2
+
+    if not walls.any():
+        return 0.0
+    h, w = walls.shape
+    side = int(math.ceil(math.hypot(h, w))) + 2
+    picture = walls.astype(np.float32)
+
+    def evenness(turn: float) -> float:
+        to_sheet = cv2.getRotationMatrix2D(((w - 1) / 2, (h - 1) / 2), float(turn), 1.0)
+        to_sheet[:, 2] += ((side - 1) / 2 - (w - 1) / 2, (side - 1) / 2 - (h - 1) / 2)
+        turned = cv2.warpAffine(picture, to_sheet, (side, side), flags=cv2.INTER_LINEAR)
+        return float((turned.sum(axis=0) ** 2).sum() + (turned.sum(axis=1) ** 2).sum())
+
+    coarse = max(np.arange(-45.0, 45.0, 1.0).tolist(), key=evenness)
+    return float(max((round(coarse + step / 10.0, 1) for step in range(-9, 10)), key=evenness))
+
+
+def _wall_gaps(walls: np.ndarray, floor: np.ndarray, res: float) -> List[Tuple[np.ndarray, np.ndarray]]:
+    """Gaps in straight wall lines: along a row or a column of the picture, a stretch of floor
+    between two runs of wall each at least DOOR_WALL long, the stretch DOOR_WIDTH wide. Each as the
+    (rows, columns) of its cells. Not a gap: the floor of a hallway where the walls between the
+    rooms on its two sides line up across it. There, unlike at a door, walls run on from both ends
+    of the gap, square to the line, for HALLWAY or more."""
     lo = int(math.ceil(DOOR_WIDTH[0] / res - 1e-9))
     hi = int(math.floor(DOOR_WIDTH[1] / res + 1e-9))
     wall_run = int(math.ceil(DOOR_WALL / res - 1e-9))
+    reach = int(math.ceil(HALLWAY / res - 1e-9))
     found = []
     for transpose in (False, True):
         w = walls.T if transpose else walls
@@ -167,6 +258,10 @@ def _doorways(walls: np.ndarray, floor: np.ndarray, res: float) -> List[Tuple[np
                     continue
                 if f[line, a1 + 1:b0].mean() < 0.8:  # mostly floor, not unknown space or clutter
                     continue
+                above = w[line + 1:line + 1 + reach, [a1, b0]]
+                below = w[max(line - reach, 0):line, [a1, b0]]
+                if any(len(side) == reach and (side.mean(axis=0) >= 0.8).all() for side in (above, below)):
+                    continue  # hallway walls on both ends
                 along = np.arange(a1 + 1, b0)
                 fixed = np.full(len(along), line)
                 found.append((along, fixed) if transpose else (fixed, along))
@@ -179,52 +274,64 @@ def _true_runs(values: np.ndarray) -> List[Tuple[int, int]]:
     return [(int(a), int(b) - 1) for a, b in zip(edges[0::2], edges[1::2])]
 
 
-def _borders_at_doorways(labels: np.ndarray, grid: Grid, walls: np.ndarray, min_area: float) -> np.ndarray:
-    """For each two rooms that meet, the doorway that cuts their floor into two rooms of at least
-    `min_area` each, matching the two best: the border moves onto it."""
-    import cv2
-
-    res = grid.resolution
-    doors = _doorways(walls, grid.floor, res)
+def _at_doorways(labels: np.ndarray, floor: np.ndarray, res: float, walls: np.ndarray, min_area: float) -> np.ndarray:
+    """The rooms in `labels` put right at the doorways. First, a doorway inside one room that cuts
+    it into two rooms of at least `min_area` each makes two of it. Then, for each two rooms that
+    meet, the border moves onto the doorway that cuts their floor in two and matches the two best."""
+    doors = _doorways(walls, floor, res)
     if not doors:
         return labels
     out = labels.copy()
     min_cells = min_area / (res * res)
+
+    def give(region: np.ndarray, into_a: np.ndarray, a: int, into_b: np.ndarray, b: int) -> None:
+        rest = region & ~into_a & ~into_b  # the cut itself and small pieces: to the nearest side
+        out[into_a], out[into_b] = a, b
+        if rest.any():
+            near = _nearest_label(np.where(into_a | into_b, out, 0), 3 * res, res)
+            out[rest] = np.where(near[rest] > 0, near[rest], out[rest])
+
+    for rows, cols in doors:
+        for a in np.unique(out[rows, cols]).tolist():
+            halves = _cut_in_two(out == a, rows, cols, res, min_cells) if a > 0 else None
+            if halves is not None:
+                give(out == a, halves[0], a, halves[1], int(out.max()) + 1)
+
     ids = [int(i) for i in np.unique(out[out > 0])]
     for a in ids:
         for b, _ in sorted(_neighbours(out, out == a).items()):
             if b <= a:
                 continue
             union = (out == a) | (out == b)
+            was_a, was_b = out == a, out == b
             best = None
             for rows, cols in doors:
-                if not union[rows, cols].any():
+                halves = _cut_in_two(union, rows, cols, res, min_cells) if union[rows, cols].any() else None
+                if halves is None:
                     continue
-                cut = np.zeros_like(union)
-                cut[rows, cols] = True
-                cut = dilate(cut, res, res)  # a wall-thick line: no corner-to-corner leak through it
-                count, comp = cv2.connectedComponents((union & ~cut).astype(np.uint8), connectivity=4)
-                sizes = np.bincount(comp.ravel(), minlength=count)
-                sizes[0] = 0
-                big = [k for k in range(1, count) if sizes[k] >= min_cells]
-                if len(big) != 2:
-                    continue
-                one, two = (comp == big[0]), (comp == big[1])
-                was_a, was_b = out == a, out == b
+                one, two = halves
                 keep = float((one & was_a).sum() + (two & was_b).sum())
                 swap = float((one & was_b).sum() + (two & was_a).sum())
-                score = max(keep, swap)
-                if best is None or score > best[0]:
-                    best = (score, (one, two) if keep >= swap else (two, one), cut)
-            if best is None:
-                continue
-            _, (into_a, into_b), cut = best
-            rest = union & ~into_a & ~into_b  # the cut itself and small pieces: to the nearest side
-            out[into_a], out[into_b] = a, b
-            if rest.any():
-                near = _nearest_label(np.where(into_a | into_b, out, 0), 3 * res, res)
-                out[rest] = np.where(near[rest] > 0, near[rest], out[rest])
+                if best is None or max(keep, swap) > best[0]:
+                    best = (max(keep, swap), (one, two) if keep >= swap else (two, one))
+            if best is not None:
+                give(union, best[1][0], a, best[1][1], b)
     return out
+
+
+def _cut_in_two(region: np.ndarray, rows: np.ndarray, cols: np.ndarray, res: float, min_cells: float):
+    """The two pieces of at least `min_cells` that the doorway at (rows, cols) cuts `region` into,
+    or None when it does not leave exactly two such pieces."""
+    import cv2
+
+    cut = np.zeros_like(region)
+    cut[rows, cols] = True
+    cut = dilate(cut, res, res)  # a wall-thick line: no corner-to-corner leak through it
+    count, comp = cv2.connectedComponents((region & ~cut).astype(np.uint8), connectivity=4)
+    sizes = np.bincount(comp.ravel(), minlength=count)
+    sizes[0] = 0
+    big = [k for k in range(1, count) if sizes[k] >= min_cells]
+    return (comp == big[0], comp == big[1]) if len(big) == 2 else None
 
 
 def _neighbours(labels: np.ndarray, mask: np.ndarray) -> dict:
