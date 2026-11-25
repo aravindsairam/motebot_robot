@@ -48,6 +48,16 @@ class Driver(Protocol):
         ...
 
 
+def costmap_ready(since: float, previous: float, latest: float, now: float, limit: float = 1.0) -> bool:
+    """Navigation started at `since`: is its local costmap fit to drive on? Its first picture may
+    come before the lidar's points are in it; the second has been through another update. A
+    costmap that came only once is given `limit` seconds and no more. `previous` and `latest`:
+    when its two newest pictures arrived (same clock as `since` and `now`)."""
+    if latest <= since:
+        return False
+    return previous > since or now - latest >= limit
+
+
 @dataclass(frozen=True)
 class RunSettings:
     goal_tolerance: float = 0.10  # m: a piece that fails this close to its end counts as done

@@ -279,3 +279,17 @@ def test_time_left_uses_the_speed_and_turn_time_measured_so_far():
     assert time_left(10.0, 4, 0.5, 5.0, 0.0, 0, s) == pytest.approx(10.0 / s.cleaning_speed + 4 * s.turn_time)
     # measured: 20 m in 150 s of which 50 s were 10 turns -> 0.2 m/s and 5 s per turn
     assert time_left(10.0, 4, 20.0, 150.0, 50.0, 10, s) == pytest.approx(10.0 / 0.2 + 4 * 5.0)
+
+
+def test_the_costmap_is_ready_once_it_has_come_twice_since_navigation_started():
+    from vacuum_coverage.job import costmap_ready
+    # navigation started at 10.0; the arguments are (since, the one before the newest, the newest, now)
+    assert not costmap_ready(10.0, 3.0, 9.0, 10.2)  # none since
+    assert not costmap_ready(10.0, 9.0, 10.3, 10.4)  # one: the obstacles around the robot may not be in it yet
+    assert costmap_ready(10.0, 10.3, 10.8, 10.8)  # two: it has been through another update
+
+
+def test_a_costmap_that_came_only_once_is_given_a_second_and_no_more():
+    from vacuum_coverage.job import costmap_ready
+    assert not costmap_ready(10.0, 9.0, 10.3, 11.2)
+    assert costmap_ready(10.0, 9.0, 10.3, 11.3)

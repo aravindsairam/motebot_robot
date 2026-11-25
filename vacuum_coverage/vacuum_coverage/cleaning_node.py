@@ -171,7 +171,8 @@ class CleaningNode(Node):
         self._job_counter = 0
         self._robot_state: Optional[RobotState] = None
         self._map_info = None  # (width, height, resolution, origin x, origin y) of the last /map
-        self._costmap_at = 0.0  # when the local costmap last published (monotonic)
+        self._costmap_times = (0.0, 0.0)  # when the local costmap's two newest pictures came (monotonic)
+        self._plans = planner.PlanMemory()  # the newest plan: a start after its preview does not plan again
         self._our_goals = set()  # navigate_to_pose goal ids this node sent
         self._strangers = {}  # other senders' active navigate_to_pose goal ids -> when first seen
         self._cancelled_strangers = set()
@@ -303,7 +304,7 @@ class CleaningNode(Node):
         self._map_info = (i.width, i.height, i.resolution, i.origin.position.x, i.origin.position.y)
 
     def _on_costmap(self, _msg) -> None:
-        self._costmap_at = time.monotonic()
+        self._costmap_times = (self._costmap_times[1], time.monotonic())
 
     def _on_safety(self, msg: SafetyStatus) -> None:
         if msg.reflex_active and not self._reflex_active:
@@ -449,8 +450,8 @@ class CleaningNode(Node):
                     raise PlanError(f"the saved plan '{spec.plan_name}' has no rows")
                 return run, self._plan_from_pieces(m, pieces, run), ""
             spec, note = run, "the map has changed since this plan was saved: its rows were planned again"
-        plan = planner.make_plan(m.grid, robot, self._settings, spec.options(bool(self.param("edges_by_default"))),
-                                 spec.area_polygon(self._settings.spot_size))
+        plan = self._plans.make_plan(m.grid, robot, self._settings, spec.options(bool(self.param("edges_by_default"))),
+                                     spec.area_polygon(self._settings.spot_size))
         return spec, plan, note
 
     def _rooms_of(self, m: mapdata.MapData) -> List[rooms.Room]:
@@ -646,17 +647,18 @@ class CleaningNode(Node):
         return False
 
     def _wait_for_nav2(self, job: _Job) -> bool:
-        """Nav2 has just been switched on: wait until its local costmap publishes and its two actions
-        answer, so the first trip is not refused for want of a costmap."""
+        """Nav2 has just been switched on: wait until its two actions answer and its local costmap
+        has the obstacles around the robot in it (jobs.costmap_ready), so the first trip is not
+        refused for want of a costmap."""
         since = time.monotonic()
         end = since + NAV2_READY_TIMEOUT
         while time.monotonic() < end:
             if self._stopped(job):
                 return False
-            if self._costmap_at > since and self._follow.server_is_ready() and self._navigate.server_is_ready():
-                time.sleep(1.0)  # one more costmap update: the obstacle layer fills from the next scans
-                return not self._stopped(job)
-            time.sleep(0.1)
+            if self._follow.server_is_ready() and self._navigate.server_is_ready() \
+                    and jobs.costmap_ready(since, *self._costmap_times, time.monotonic()):
+                return True
+            time.sleep(0.05)
         return False
 
     def _ask_mode(self, mode: str) -> Tuple[bool, str]:

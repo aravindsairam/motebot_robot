@@ -179,7 +179,7 @@ class ModeManager(Node):
         self.declare_parameter("startup_grace", 30.0)
         self.declare_parameter("dock_id", "home_dock")  # which dock in the docking server's list
         self.declare_parameter("max_staging_time", 120.0)  # s allowed to reach the spot in front of the dock
-        self.declare_parameter("docking_settle_time", 1.5)  # s; must be longer than AMCL's transform_tolerance
+        self.declare_parameter("docking_settle_time", 0.5)  # s; must be longer than AMCL's transform_tolerance (0.3)
         self.declare_parameter("health_period", 2.0)
 
         self._maps_dir = self.get_parameter("maps_dir").value
@@ -1000,7 +1000,7 @@ class ModeManager(Node):
             if not ok:
                 return False, why
             # The docking server has only just started listening to transforms, and AMCL stamps
-            # the robot's place on the map one second ahead (its transform_tolerance). Until the
+            # the robot's place on the map a little ahead (its transform_tolerance). Until the
             # server has listened for longer than that it cannot place the robot, and a docking
             # request fails at once. Wait that long, measured on the robot's own clock.
             settle = float(self.get_parameter("docking_settle_time").value)

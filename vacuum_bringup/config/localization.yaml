@@ -13,7 +13,10 @@ amcl:
     base_frame_id: "base_link"     # changed: the robot has no base_footprint
     scan_topic: scan
     tf_broadcast: true
-    transform_tolerance: 1.0
+    # changed from 1.0: AMCL stamps the robot's place this far ahead, and a node that has just
+    # started (Nav2's planner, the docking server) cannot place the robot until it has listened
+    # for that long. 0.3 s still covers two missed scans (the lidar sends ten a second).
+    transform_tolerance: 0.3
 
     # The mode manager publishes the starting pose on /initialpose each time it activates AMCL:
     # the dock at first start, otherwise wherever mapping or the last localization left off.

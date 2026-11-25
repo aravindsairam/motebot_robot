@@ -262,6 +262,26 @@ class _Row:
 
 
 # ---------------------------------------------------------------- planning
+class PlanMemory:
+    """Remembers the newest plan and what it was made from. A start that follows a preview of the
+    same job, with the robot still where it stood, gets that plan instead of planning it again."""
+
+    def __init__(self, same_place: float = 0.05):
+        self._same_place = same_place  # m: closer than this to where the plan was made from, the robot has not moved
+        self._last = None  # (grid, settings, options, area, robot, plan), replaced as one
+
+    def make_plan(self, grid: Grid, robot: Point, settings: Settings, options: Options,
+                  area: Optional[Sequence[Point]] = None) -> Plan:
+        area = None if area is None else tuple(tuple(p) for p in area)
+        last = self._last
+        if last is not None and last[0] is grid and last[1:4] == (settings, options, area) \
+                and math.dist(last[4], robot) <= self._same_place:
+            return last[5]
+        plan = make_plan(grid, robot, settings, options, area)
+        self._last = (grid, settings, options, area, tuple(robot), plan)
+        return plan
+
+
 def make_plan(grid: Grid, robot: Point, settings: Settings, options: Options, area: Optional[Sequence[Point]] = None) -> Plan:
     started = time.perf_counter()
     s = settings

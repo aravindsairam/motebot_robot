@@ -623,3 +623,33 @@ def test_slanted_rows_on_the_house_map_keep_clear_and_reach_most_of_the_floor():
         check_clearance(m.grid, plan, (ROW,), S.row_clearance, tolerance=0.0125)
         check_planned_floor_is_covered(m.grid, plan, at_least=0.92)
         assert make_plan(m.grid, (0.0, 0.0), S, Options(direction=angle)).pieces == plan.pieces  # the same again
+
+
+# ---------------------------------------------------------------- the newest plan is remembered
+def test_the_same_job_from_the_same_place_is_planned_once():
+    g = grid(room(3.0, 2.0))
+    memory = planner.PlanMemory()
+    preview = memory.make_plan(g, (1.0, 1.0), S, Options(direction="x"))
+    assert preview.pieces == make_plan(g, (1.0, 1.0), S, Options(direction="x")).pieces
+    # The start that follows a preview: the robot stands where it stood, give or take a few cm.
+    assert memory.make_plan(g, (1.02, 0.99), S, Options(direction="x")) is preview
+
+
+def test_a_job_is_planned_again_when_anything_it_depends_on_has_changed():
+    g = grid(room(3.0, 2.0))
+    area = [(0.5, 0.5), (2.0, 0.5), (2.0, 1.5), (0.5, 1.5)]
+    changes = [
+        dict(robot=(1.5, 1.0)),  # the robot has moved
+        dict(options=Options(direction="y")),
+        dict(settings=Settings(row_spacing=0.20)),
+        dict(area=area),
+        dict(g=grid(room(3.0, 2.0))),  # another map, even one that looks the same
+    ]
+    for change in changes:
+        memory = planner.PlanMemory()
+        job = dict(g=g, robot=(1.0, 1.0), settings=S, options=Options(direction="x"), area=None)
+        first = memory.make_plan(job["g"], job["robot"], job["settings"], job["options"], job["area"])
+        job.update(change)
+        second = memory.make_plan(job["g"], job["robot"], job["settings"], job["options"], job["area"])
+        assert second is not first, change
+        assert second.pieces == make_plan(job["g"], job["robot"], job["settings"], job["options"], job["area"]).pieces
