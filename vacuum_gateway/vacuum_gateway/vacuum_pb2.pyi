@@ -27,6 +27,7 @@ class CommandType(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     COMMAND_SET_ROBOT_SETTINGS: _ClassVar[CommandType]
     COMMAND_FIND_ROOMS: _ClassVar[CommandType]
     COMMAND_SET_ROOMS: _ClassVar[CommandType]
+    COMMAND_EDIT_ROOMS: _ClassVar[CommandType]
     COMMAND_GO_TO: _ClassVar[CommandType]
     COMMAND_CANCEL_GOAL: _ClassVar[CommandType]
     COMMAND_DRIVE: _ClassVar[CommandType]
@@ -75,6 +76,7 @@ COMMAND_SET_NO_GO_ZONES: CommandType
 COMMAND_SET_ROBOT_SETTINGS: CommandType
 COMMAND_FIND_ROOMS: CommandType
 COMMAND_SET_ROOMS: CommandType
+COMMAND_EDIT_ROOMS: CommandType
 COMMAND_GO_TO: CommandType
 COMMAND_CANCEL_GOAL: CommandType
 COMMAND_DRIVE: CommandType
@@ -369,6 +371,18 @@ class SetRooms(_message.Message):
     map_name: str
     rooms: _containers.RepeatedCompositeFieldContainer[Rooms.Room]
     def __init__(self, request_id: _Optional[int] = ..., map_name: _Optional[str] = ..., rooms: _Optional[_Iterable[_Union[Rooms.Room, _Mapping]]] = ...) -> None: ...
+
+class EditRooms(_message.Message):
+    __slots__ = ("request_id", "rooms", "join", "cut_cm")
+    REQUEST_ID_FIELD_NUMBER: _ClassVar[int]
+    ROOMS_FIELD_NUMBER: _ClassVar[int]
+    JOIN_FIELD_NUMBER: _ClassVar[int]
+    CUT_CM_FIELD_NUMBER: _ClassVar[int]
+    request_id: int
+    rooms: _containers.RepeatedCompositeFieldContainer[Rooms.Room]
+    join: _containers.RepeatedScalarFieldContainer[int]
+    cut_cm: _containers.RepeatedScalarFieldContainer[int]
+    def __init__(self, request_id: _Optional[int] = ..., rooms: _Optional[_Iterable[_Union[Rooms.Room, _Mapping]]] = ..., join: _Optional[_Iterable[int]] = ..., cut_cm: _Optional[_Iterable[int]] = ...) -> None: ...
 
 class AskAssistant(_message.Message):
     __slots__ = ("request_id", "conversation", "text")

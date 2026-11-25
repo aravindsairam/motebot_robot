@@ -24,6 +24,7 @@ it gives to a phone that connects late. The robot works the same whether or not 
     SetRobotSettings -> /set_robot_settings (vacuum_interfaces/srv/SetRobotSettings) -> Reply
     /rooms           vacuum_interfaces/msg/Rooms         -> Rooms          (on change)
     FindRooms, SetRooms -> /rooms/find, /rooms/set (the rooms node) -> Reply (with the rooms found)
+    EditRooms        -> /rooms/edit (vacuum_interfaces/srv/EditRooms) -> Reply with the rooms after the change
     /assistant/status  vacuum_interfaces/msg/AssistantStatus -> AssistantStatus (on change, 2 a second)
     AskAssistant     -> /assistant/ask (vacuum_interfaces/srv/AskAssistant) -> Reply with the answer
     NameRooms        -> /assistant/name_rooms (vacuum_interfaces/srv/NameRooms) -> Reply with the rooms named
@@ -75,7 +76,7 @@ from tf2_ros import Buffer, TransformException, TransformListener
 
 from vacuum_interfaces.msg import (AssistantStatus, CleaningJob, CleaningPlan, CleaningStatus, ExplorationStatus, NoGoZone, Room,
                                    Rooms, RobotSettings, RobotState, SafetyStatus)
-from vacuum_interfaces.srv import (AskAssistant, ChangeState, DeleteCleaningPlan, FindRooms, GetCleaningRecord, ListCleaningHistory,
+from vacuum_interfaces.srv import (AskAssistant, ChangeState, DeleteCleaningPlan, EditRooms, FindRooms, GetCleaningRecord, ListCleaningHistory,
                                    ListCleaningPlans, NameRooms, PreviewCleaning, SaveCleaningPlan, SaveMap, SetNoGoZones,
                                    SetRobotSettings, SetRooms, StartCleaning, StartExploration)
 
@@ -111,6 +112,7 @@ START_EXPLORATION_TIMEOUT = 10.0  # the exploration node answers at once, before
 SET_SETTINGS_TIMEOUT = 10.0  # the settings node checks and writes a small file
 FIND_ROOMS_TIMEOUT = 20.0  # splitting a map takes well under a second
 SET_ROOMS_TIMEOUT = 10.0
+EDIT_ROOMS_TIMEOUT = 20.0  # joining two rooms or cutting one takes well under a second
 # The assistant answers in seconds, but waits for the robot when asked to go somewhere (minutes).
 ASK_TIMEOUT = 600.0
 NAME_ROOMS_TIMEOUT = 900.0  # a drive to every room, and a look in each
@@ -341,6 +343,24 @@ def make_commands(node, executor, loop, driver: drive.DriverLock):
         response = await ros_call(executor, node.set_rooms, SetRooms.Request(map_name=message.map_name.strip(), rooms=new), loop)
         return (Result.RESULT_OK if response.success else Result.RESULT_REFUSED), response.message
 
+    async def edit_rooms(message):
+        now, problem = rooms_from_phone(message.rooms)
+        if now is None:
+            return Result.RESULT_BAD_REQUEST, problem
+        change = convert.rooms_change(message)
+        if change is None:
+            return Result.RESULT_BAD_REQUEST, "give two rooms to join, or a line to cut a room along"
+        if "join" in change:
+            request = EditRooms.Request(rooms=now, change=EditRooms.Request.JOIN, a=change["join"][0], b=change["join"][1])
+        else:
+            request = EditRooms.Request(rooms=now, change=EditRooms.Request.CUT, line=change["line"])
+        if not node.edit_rooms.service_is_ready():
+            return Result.RESULT_NOT_AVAILABLE, "the rooms node is not running (no /rooms/edit service)"
+        response = await ros_call(executor, node.edit_rooms, request, loop)
+        if not response.success:
+            return Result.RESULT_REFUSED, response.message
+        return Result.RESULT_OK, response.message, {"rooms": convert.rooms(response.rooms, node.map_in_use)}
+
     async def ask_assistant(message):
         if not message.text.strip():
             return Result.RESULT_BAD_REQUEST, "nothing was asked"
@@ -387,6 +407,7 @@ def make_commands(node, executor, loop, driver: drive.DriverLock):
         pb.COMMAND_SET_ROBOT_SETTINGS: Command("set settings", pb.SetRobotSettings, SET_SETTINGS_TIMEOUT, set_settings),
         pb.COMMAND_FIND_ROOMS: Command("find rooms", pb.FindRooms, FIND_ROOMS_TIMEOUT, find_rooms),
         pb.COMMAND_SET_ROOMS: Command("set rooms", pb.SetRooms, SET_ROOMS_TIMEOUT, set_rooms),
+        pb.COMMAND_EDIT_ROOMS: Command("edit rooms", pb.EditRooms, EDIT_ROOMS_TIMEOUT, edit_rooms),
         pb.COMMAND_ASK_ASSISTANT: Command("ask the assistant", pb.AskAssistant, ASK_TIMEOUT, ask_assistant),
         pb.COMMAND_NAME_ROOMS: Command("name rooms", pb.NameRooms, NAME_ROOMS_TIMEOUT, name_rooms),
         pb.COMMAND_GO_TO: Command("go to", pb.GoTo, GO_TO_TIMEOUT, go_to),
@@ -522,6 +543,7 @@ class RobotSide(Node):
         self.create_subscription(Rooms, "rooms", self._on_rooms, latched)
         self.find_rooms = self.create_client(FindRooms, "rooms/find")
         self.set_rooms = self.create_client(SetRooms, "rooms/set")
+        self.edit_rooms = self.create_client(EditRooms, "rooms/edit")
         self.create_subscription(AssistantStatus, "assistant/status", self._on_assistant_status, 10)
         self.ask = self.create_client(AskAssistant, "assistant/ask")
         self.name_rooms = self.create_client(NameRooms, "assistant/name_rooms")

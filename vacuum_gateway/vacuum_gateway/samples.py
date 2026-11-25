@@ -194,6 +194,10 @@ def build() -> Dict[str, bytes]:
         "command_find_rooms.bin": _frame(pb.COMMAND_FIND_ROOMS, pb.FindRooms(request_id=76), pb.CHANNEL_COMMAND),
         "command_set_rooms.bin": _frame(pb.COMMAND_SET_ROOMS, pb.SetRooms(
             request_id=77, map_name="home", rooms=convert.rooms(room_list, "home").rooms), pb.CHANNEL_COMMAND),
+        "command_edit_rooms_join.bin": _frame(pb.COMMAND_EDIT_ROOMS, pb.EditRooms(
+            request_id=81, rooms=convert.rooms(room_list, "home").rooms, join=[1, 0]), pb.CHANNEL_COMMAND),
+        "command_edit_rooms_cut.bin": _frame(pb.COMMAND_EDIT_ROOMS, pb.EditRooms(
+            request_id=82, rooms=convert.rooms(room_list, "home").rooms, cut_cm=[855, 20, 855, -150]), pb.CHANNEL_COMMAND),
         "command_ask_assistant.bin": _frame(pb.COMMAND_ASK_ASSISTANT, pb.AskAssistant(
             request_id=78, conversation="phone-1a2b", text="Clean the kitchen, please é"), pb.CHANNEL_COMMAND),
         "command_name_rooms.bin": _frame(pb.COMMAND_NAME_ROOMS, pb.NameRooms(

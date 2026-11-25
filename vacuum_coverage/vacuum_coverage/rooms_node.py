@@ -2,6 +2,7 @@
 
     /rooms         vacuum_interfaces/msg/Rooms         latched: the rooms of the map in use
     /rooms/find    vacuum_interfaces/srv/FindRooms     split the map in use into rooms (a proposal)
+    /rooms/edit    vacuum_interfaces/srv/EditRooms     join two rooms, or cut one in two (a proposal)
     /rooms/set     vacuum_interfaces/srv/SetRooms      save the rooms of the map in use
 
 The rooms live next to the map (<maps dir>/<map>_rooms.yaml, see rooms.py). The cleaning node reads
@@ -22,7 +23,7 @@ from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 
 from vacuum_interfaces.msg import Room as RoomMsg
 from vacuum_interfaces.msg import Rooms, RobotState
-from vacuum_interfaces.srv import FindRooms, SetRooms
+from vacuum_interfaces.srv import EditRooms, FindRooms, SetRooms
 from vacuum_mode_manager import map_files
 
 from . import mapdata, rooms
@@ -56,6 +57,7 @@ class RoomsNode(Node):
         self.create_subscription(RobotState, "robot_state", self._on_state, latched, callback_group=MutuallyExclusiveCallbackGroup())
         services = ReentrantCallbackGroup()
         self.create_service(FindRooms, "rooms/find", self._on_find, callback_group=services)
+        self.create_service(EditRooms, "rooms/edit", self._on_edit, callback_group=services)
         self.create_service(SetRooms, "rooms/set", self._on_set, callback_group=services)
         self.create_timer(CHECK_PERIOD, self._publish, clock=Clock(clock_type=ClockType.STEADY_TIME))
         self._publish()
@@ -113,6 +115,34 @@ class RoomsNode(Node):
         response.message = f"found {len(found)} room{'s' if len(found) != 1 else ''}"
         response.rooms = [to_msg(r) for r in found]
         self.get_logger().info(f"rooms found on '{name}': {', '.join(f'{r.name} {r.area:.1f} m2' for r in found)}")
+        return response
+
+    def _on_edit(self, request, response):
+        name = self._map
+        if not name:
+            response.success, response.message = False, "there is no saved map in use: save a map first"
+            return response
+        now = [from_msg(r) for r in request.rooms]
+        try:
+            grid = self._load_map(name).grid
+            if request.change == EditRooms.Request.JOIN:
+                new = rooms.join(now, int(request.a), int(request.b), grid)
+            elif request.change == EditRooms.Request.CUT:
+                x0, y0, x1, y1 = (float(v) for v in request.line)
+                new = rooms.cut(now, ((x0, y0), (x1, y1)), grid)
+            else:
+                raise ValueError("neither two rooms to join nor a line to cut one along")
+        except ValueError as why:  # not possible: said in words the app shows
+            response.success, response.message = False, str(why)
+            return response
+        except Exception as exc:
+            self.get_logger().error(f"changing the rooms of '{name}' failed: {exc!r}")
+            response.success, response.message = False, f"could not change the rooms: {exc}"
+            return response
+        response.success = True
+        response.message = f"{len(new)} room{'s' if len(new) != 1 else ''} now"
+        response.rooms = [to_msg(r) for r in new]
+        self.get_logger().info(f"rooms of '{name}' changed by hand (not saved): {', '.join(f'{r.name} {r.area:.1f} m2' for r in new)}")
         return response
 
     def _on_set(self, request, response):

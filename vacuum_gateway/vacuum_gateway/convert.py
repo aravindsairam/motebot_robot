@@ -302,6 +302,17 @@ def room_fields(r: pb.Rooms.Room) -> dict:
     }
 
 
+def rooms_change(message: pb.EditRooms):
+    """What an EditRooms asks for: {"join": (a, b)}, two rooms by their places in the list, or
+    {"line": [x0, y0, x1, y1]}, in metres, to cut a room along. None when it asks for neither, or both."""
+    join, line = list(message.join), list(message.cut_cm)
+    if len(join) == 2 and not line:
+        return {"join": (join[0], join[1])}
+    if len(line) == 4 and not join:
+        return {"line": [v / 100.0 for v in line]}
+    return None
+
+
 def assistant_status(msg) -> pb.AssistantStatus:
     """From vacuum_interfaces/msg/AssistantStatus."""
     return pb.AssistantStatus(busy=msg.busy, conversation=msg.conversation, doing=msg.doing)

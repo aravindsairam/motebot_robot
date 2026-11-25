@@ -317,3 +317,11 @@ def test_rooms_and_the_assistant_answer_in_centimetres():
     answer = convert.assistant_answer(N(reply="On my way.", tools_used=["go_to_room"], picture_jpeg=[1, 2], mark=[1.5, -2.25]))
     assert answer.text == "On my way." and answer.picture_jpeg == bytes([1, 2]) and list(answer.mark_cm) == [150, -225]
     assert list(convert.assistant_answer(N(reply="", tools_used=[], picture_jpeg=[], mark=[])).mark_cm) == []
+
+
+def test_a_change_to_the_rooms_is_two_rooms_to_join_or_a_line_to_cut_one_along():
+    assert convert.rooms_change(pb.EditRooms(join=[2, 0])) == {"join": (2, 0)}
+    assert convert.rooms_change(pb.EditRooms(cut_cm=[150, -25, 150, 310])) == {"line": [1.5, -0.25, 1.5, 3.1]}
+    for neither in (pb.EditRooms(), pb.EditRooms(join=[1]), pb.EditRooms(join=[1, 2, 3]), pb.EditRooms(cut_cm=[1, 2, 3]),
+                    pb.EditRooms(join=[0, 1], cut_cm=[0, 0, 100, 100])):
+        assert convert.rooms_change(neither) is None

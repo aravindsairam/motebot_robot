@@ -33,6 +33,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/AskAssistant.srv"
   "srv/FindRooms.srv"
   "srv/SetRooms.srv"
+  "srv/EditRooms.srv"
   "srv/RoomReport.srv"
   "srv/NameRooms.srv"
   "srv/FindObjects.srv"

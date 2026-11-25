@@ -17,6 +17,10 @@ keeps them apart. Around it:
   5. each room gets an outline (a polygon around its floor), its most open spot (where the robot goes
      to visit it: just inside its widest doorway, see _entry_spot) and its floor area.
 
+No split is right every time, so rooms can also be changed by hand: two that touch joined into one
+(join), or one cut in two along a line (cut). Both work on rooms known by their outlines alone, as
+the app holds them.
+
 The file, next to the map (map_files.rooms_path):
     rooms:
       - {name: Kitchen, outline: [[x, y], ...], x: 8.5, y: 1.6, area: 12.8}
@@ -43,6 +47,7 @@ FURNITURE = 4.0  # m2: a thing standing free on the floor, up to this big, is fu
 WALL = (0.4, 3.0)  # unless it is long and thin like a wall: at least this long (m), and this many times longer than thick
 HALLWAY = 0.5  # m: walls that run on this far from both ends of a gap, to one side, make it a stretch of hallway
 STRAIGHT = 0.25  # degrees: walls turned less than this from the map's rows and columns are along them
+SMALLEST = 0.5  # m2: a room cut in two by hand keeps at least this much floor on each side
 MAX_ROOMS = 30
 MAX_NAME = 40
 STAND_CLEARANCE = 0.20  # m from the walls where the robot can stand: its radius and a little more
@@ -100,27 +105,13 @@ def find(grid: Grid, min_area: float = MIN_AREA, walls: Optional[np.ndarray] = N
         floor_parts = _at_doorways(floor_parts, ground, res, walls & ~furniture, min_area)
     floor_parts = np.where(grid.floor, floor_parts, 0)
     height = clearance_field(grid.floor, res, _PART_CAP)  # from here on: where the robot can really stand
-    stand = height >= STAND_CLEARANCE - 1e-9
-    parts = np.where(stand, floor_parts, 0)
 
     rooms: List[Room] = []
     for part in np.unique(floor_parts[floor_parts > 0]).tolist():
         cells = floor_parts == part
-        outline = outline_of(cells, grid)
-        if len(outline) < 3:
-            continue
-        entry = _entry_spot(cells, floor_parts, part, height, grid)
-        if entry is not None:
-            x, y = grid.centre(*entry)
-            rooms.append(Room("", outline, x, y, float(cells.sum()) * cell_area, cells))
-            continue
-        spot = np.where((parts == part) & stand, height, -1.0)
-        r, c = np.unravel_index(int(np.argmax(spot)), spot.shape)
-        if spot[r, c] < 0:  # nowhere to stand: take the floor cell farthest from the walls
-            spot = np.where(cells, height, -1.0)
-            r, c = np.unravel_index(int(np.argmax(spot)), spot.shape)
-        x, y = grid.centre(r, c)
-        rooms.append(Room("", outline, x, y, float(cells.sum()) * cell_area, cells))
+        room = _room_of(cells, (floor_parts > 0) & ~cells, height, grid)
+        if room is not None:
+            rooms.append(room)
     rooms.sort(key=lambda room: (-room.area, room.x, room.y))
     for i, room in enumerate(rooms, start=1):
         room.name = f"Room {i}"
@@ -151,14 +142,31 @@ def _furniture(floor: np.ndarray, res: float) -> np.ndarray:
     return out
 
 
-def _entry_spot(cells: np.ndarray, labels: np.ndarray, part: int, height: np.ndarray, grid: Grid) -> Optional[Tuple[int, int]]:
+def _room_of(cells: np.ndarray, other: np.ndarray, height: np.ndarray, grid: Grid) -> Optional[Room]:
+    """The room with this floor, not yet named: its outline, the spot to visit it and its area.
+    `other`: the floor of the other rooms; `height`: how far each cell is from the walls. None when
+    the floor is too thin to have an outline."""
+    outline = outline_of(cells, grid)
+    if len(outline) < 3:
+        return None
+    spot = _entry_spot(cells, other, height, grid)
+    if spot is None:  # no doorway: its most open place where the robot can stand, or failing that, of all its floor
+        for where in (cells & (height >= STAND_CLEARANCE - 1e-9), cells):
+            open_ = np.where(where, height, -1.0)
+            spot = np.unravel_index(int(np.argmax(open_)), open_.shape)
+            if open_[spot] >= 0:
+                break
+    x, y = grid.centre(*spot)
+    return Room("", outline, x, y, float(cells.sum()) * grid.resolution ** 2, cells)
+
+
+def _entry_spot(cells: np.ndarray, other: np.ndarray, height: np.ndarray, grid: Grid) -> Optional[Tuple[int, int]]:
     """Where a person would stand to see the room: just inside its widest doorway, toward the room's
     middle. (The room's most open place on the map can be under a bed or a table: the lidar sees only
-    their legs.) None when the room has no neighbour."""
+    their legs.) `other`: the floor of the other rooms. None when the room has no neighbour."""
     import cv2
 
     res = grid.resolution
-    other = (labels > 0) & (labels != part)
     border = cells & dilate(other, res, res)
     if not border.any():
         return None
@@ -363,6 +371,136 @@ def outline_of(cells: np.ndarray, grid: Grid, tolerance: float = 0.10) -> List[T
     if len(simple) < 3:
         return []
     return [grid.centre(row, col) for col, row in simple.tolist()]
+
+
+# ---------------------------------------------------------------- changing by hand
+def join(rooms: Sequence[Room], a: int, b: int, grid: Grid) -> List[Room]:
+    """The list with rooms `a` and `b` (their places in it, from 0) made one room, under the name
+    and in the place of the bigger. The other rooms are left as they are. Raises ValueError, in
+    words for the user, when these are not two rooms that touch."""
+    import cv2
+
+    if not (0 <= a < len(rooms) and 0 <= b < len(rooms)) or a == b:
+        raise ValueError("pick two different rooms to join")
+    res = grid.resolution
+    cells = _floors(rooms, grid)
+    seam = dilate(cells[a], 2 * res, res) & dilate(cells[b], 2 * res, res) & grid.floor  # the doorway between them
+    count, comp = cv2.connectedComponents((cells[a] | cells[b] | seam).astype(np.uint8), connectivity=8)
+    piece = int(np.bincount(comp[cells[a]], minlength=count).argmax()) if seam.any() else 0
+    if piece == 0 or piece != int(np.bincount(comp[cells[b]], minlength=count).argmax()):
+        raise ValueError(f"'{rooms[a].name}' and '{rooms[b].name}' do not touch")
+    keep, gone = (a, b) if rooms[a].area >= rooms[b].area else (b, a)
+    other = np.zeros(grid.shape, dtype=bool)
+    for i, c in enumerate(cells):
+        if i not in (a, b):
+            other |= c
+    joined = _room_of(comp == piece, other, clearance_field(grid.floor, res, _PART_CAP), grid)
+    if joined is None:
+        raise ValueError(f"'{rooms[a].name}' and '{rooms[b].name}' do not touch")
+    joined.name = rooms[keep].name
+    out = list(rooms)
+    out[keep] = joined
+    del out[gone]
+    return out
+
+
+def cut(rooms: Sequence[Room], line: Tuple[Tuple[float, float], Tuple[float, float]], grid: Grid) -> List[Room]:
+    """The list with one room cut in two along `line` ((x0, y0), (x1, y1), map metres): the room
+    most of the line lies in. The line is carried on from both ends to the room's walls, through
+    furniture standing in the room, so it need not reach them. The bigger part keeps the name and
+    the place in the list; the other comes right after it, as "Room n". Raises ValueError, in words
+    for the user, when the line does not cut a room into two parts of at least SMALLEST each."""
+    import cv2
+
+    if len(rooms) >= MAX_ROOMS:
+        raise ValueError(f"at most {MAX_ROOMS} rooms")
+    res = grid.resolution
+    (x0, y0), (x1, y1) = line
+    if not all(math.isfinite(v) for v in (x0, y0, x1, y1)):
+        raise ValueError("the line is not in a room")
+    length = math.hypot(x1 - x0, y1 - y0)
+    steps = max(int(math.ceil(2 * length / res)), 1)  # two looks per cell along the line
+    between = [grid.cell_of(x0 + (x1 - x0) * k / steps, y0 + (y1 - y0) * k / steps) for k in range(steps + 1)]
+    between = [cell for cell in between if grid.contains(*cell)]
+    cells = _floors(rooms, grid)
+    on_line = [sum(bool(c[cell]) for cell in between) for c in cells]
+    if not on_line or max(on_line) == 0:
+        raise ValueError("the line is not in a room")
+    i = int(np.argmax(on_line))
+    whole = _holes_filled(cells[i])
+    rows, cols = [], []
+
+    def take(along: float) -> bool:
+        row, col = grid.cell_of(x0 + (x1 - x0) * along / length, y0 + (y1 - y0) * along / length)
+        if not grid.contains(row, col) or not whole[row, col]:
+            return False
+        rows.append(row)
+        cols.append(col)
+        return True
+
+    if length > 0:
+        for k in range(steps + 1):
+            take(length * k / steps)
+        for step, end in ((-res / 2, 0.0), (res / 2, length)):  # on from each end, to the wall
+            along = end
+            while take(along):
+                along += step
+    halves = _cut_in_two(cells[i], np.array(rows), np.array(cols), res, SMALLEST / (res * res)) if rows else None
+    if halves is None:
+        raise ValueError("the line does not cut a room in two: put its ends near two walls of the room")
+    # The cut itself and small pieces go to the nearer part.
+    far = [cv2.distanceTransform((~half).astype(np.uint8), cv2.DIST_L2, 3) for half in halves]
+    one = cells[i] & (far[0] <= far[1])
+    big, small = sorted((one, cells[i] & ~one), key=lambda part: -int(part.sum()))
+    other = np.zeros(grid.shape, dtype=bool)
+    for k, c in enumerate(cells):
+        if k != i:
+            other |= c
+    height = clearance_field(grid.floor, res, _PART_CAP)
+    first, second = _room_of(big, other | small, height, grid), _room_of(small, other | big, height, grid)
+    if first is None or second is None:
+        raise ValueError("the line does not cut a room in two: put its ends near two walls of the room")
+    first.name = rooms[i].name
+    taken = {" ".join(room.name.split()).lower() for room in rooms}
+    second.name = next(f"Room {n}" for n in range(1, len(rooms) + 2) if f"room {n}" not in taken)
+    return list(rooms[:i]) + [first, second] + list(rooms[i + 1:])
+
+
+def _floors(rooms: Sequence[Room], grid: Grid) -> List[np.ndarray]:
+    """The floor of each room: as found, or for a room known by its outline alone (from the file or
+    the app), the floor inside it. An outline runs through the cells just outside its room's floor
+    (outline_of), so where two rooms meet, each outline holds a strip of the other room: there the
+    floor goes to the room whose outline, drawn in by that one ring of cells, still holds it."""
+    import cv2
+
+    res = grid.resolution
+    inside, core = [], []
+    for room in rooms:
+        picture = np.zeros(grid.shape, dtype=np.uint8)
+        if len(room.outline) >= 3:
+            corners = [[round((x - grid.origin[0]) / res - 0.5), round((y - grid.origin[1]) / res - 0.5)] for x, y in room.outline]
+            cv2.fillPoly(picture, [np.array(corners, dtype=np.int32)], 1)
+        inside.append(picture.astype(bool) & grid.floor)
+        core.append(cv2.erode(picture, np.ones((3, 3), np.uint8)).astype(bool))
+    out = []
+    for i, room in enumerate(rooms):
+        if room.cells is not None:
+            out.append(room.cells)
+            continue
+        others = np.zeros(grid.shape, dtype=bool)
+        for k, c in enumerate(core):
+            if k != i:
+                others |= c
+        out.append(inside[i] & ~others)
+    return out
+
+
+def _holes_filled(cells: np.ndarray) -> np.ndarray:
+    """The cells and what they close in on every side: the furniture standing in a room."""
+    import cv2
+
+    _, comp = cv2.connectedComponents(np.pad(~cells, 1, constant_values=True).astype(np.uint8), connectivity=4)
+    return (comp != comp[0, 0])[1:-1, 1:-1]
 
 
 # ---------------------------------------------------------------- names

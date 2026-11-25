@@ -263,3 +263,94 @@ def test_the_saved_home_map_keeps_its_true_rooms_when_the_map_is_turned(tilt):
         true_cells = _turned(truth(m.grid, *world.room_world(room_name)), tilt) & g.floor
         best = max(iou(r.cells, true_cells) for r in found)
         assert best >= 0.75, f"{room_name}: best match {best:.2f}"
+
+
+# ---------------------------------------------------------------- changed by hand
+def from_phone(found):
+    """Rooms as they come back from the app: outlines only, in whole centimetres."""
+    return [Room(r.name, [(round(x, 2), round(y, 2)) for x, y in r.outline], round(r.x, 2), round(r.y, 2), r.area) for r in found]
+
+
+def floor_of(g, room):
+    return polygon_mask(g, room.outline) & g.floor
+
+
+def three_in_a_row():
+    """Kitchen (12 m2), Pantry (9 m2) and Living room (15 m2) side by side, a door in each wall between."""
+    cells = plan(13.0, 4.0)
+    walled_room(cells, 0.2, 0.2, 4.2, 3.2)
+    walled_room(cells, 4.3, 0.2, 7.3, 3.2)
+    walled_room(cells, 7.4, 0.2, 12.4, 3.2)
+    fill(cells, 4.2, 1.2, 4.3, 2.1, 0)
+    fill(cells, 7.3, 1.2, 7.4, 2.1, 0)
+    g, walls = grid_of(cells)
+    found = sorted(rooms.find(g, walls=walls), key=lambda r: r.x)
+    for room, name in zip(found, ("Kitchen", "Pantry", "Living room")):
+        room.name = name
+    return g, from_phone(found)
+
+
+def test_two_rooms_joined_are_one_under_the_name_of_the_bigger():
+    g, three = three_in_a_row()
+    out = rooms.join(three, 1, 0, g)
+    assert [r.name for r in out] == ["Kitchen", "Living room"]
+    assert out[1] == three[2]  # the others stay as they were
+    assert iou(floor_of(g, out[0]), truth(g, 0.2, 0.2, 7.3, 3.2)) > 0.97
+    assert abs(out[0].area - 21.0) < 0.5 and g.floor[g.cell_of(out[0].x, out[0].y)]
+
+
+def test_rooms_that_do_not_touch_cannot_be_joined():
+    g, three = three_in_a_row()
+    with pytest.raises(ValueError, match="do not touch"):
+        rooms.join(three, 0, 2, g)
+    cells = plan(9.0, 4.0)
+    fill(cells, 0.1, 0.1, 8.4, 3.3, 100)
+    fill(cells, 0.2, 0.2, 4.2, 3.2, 0)
+    fill(cells, 4.25, 0.2, 8.3, 3.2, 0)  # a wall one cell thick between them, and no door
+    g, walls = grid_of(cells)
+    with pytest.raises(ValueError, match="do not touch"):
+        rooms.join(from_phone(rooms.find(g, walls=walls)), 0, 1, g)
+    with pytest.raises(ValueError, match="two different rooms"):
+        rooms.join(three, 1, 1, g)
+
+
+@pytest.mark.parametrize("legs", [False, True])
+def test_a_line_across_a_room_cuts_it_in_two_and_need_not_reach_the_walls(legs):
+    cells = plan(9.0, 5.0)
+    walled_room(cells, 0.2, 0.2, 8.2, 4.2)
+    if legs:  # furniture standing on the line, between its ends and the walls
+        fill(cells, 5.2, 1.0, 5.25, 1.05, 100)
+        fill(cells, 5.2, 3.4, 5.25, 3.45, 100)
+    g, walls = grid_of(cells)
+    whole = rooms.find(g, walls=walls)
+    whole[0].name = "Living room"
+    out = rooms.cut(from_phone(whole), ((5.2, 1.8), (5.2, 2.6)), g)
+    assert [r.name for r in out] == ["Living room", "Room 1"]  # the bigger part keeps the name
+    assert iou(floor_of(g, out[0]), truth(g, 0.2, 0.2, 5.2, 4.2)) > 0.95
+    assert iou(floor_of(g, out[1]), truth(g, 5.2, 0.2, 8.2, 4.2)) > 0.95
+    assert abs(out[0].area - 20.0) < 0.6 and abs(out[1].area - 12.0) < 0.6
+    for r in out:
+        assert floor_of(g, r)[g.cell_of(r.x, r.y)]
+
+
+@pytest.mark.parametrize("line, words", [
+    (((20.0, 1.0), (20.0, 2.0)), "not in a room"),  # off the map
+    (((0.3, 0.7), (0.7, 0.3)), "in two"),           # cuts off a corner too small to be a room
+    (((3.0, 2.0), (3.0, 2.0)), "in two"),           # a point, not a line
+])
+def test_a_line_that_does_not_cut_a_room_in_two_is_refused(line, words):
+    cells = plan(9.0, 5.0)
+    walled_room(cells, 0.2, 0.2, 8.2, 4.2)
+    g, walls = grid_of(cells)
+    with pytest.raises(ValueError, match=words):
+        rooms.cut(from_phone(rooms.find(g, walls=walls)), line, g)
+
+
+def test_a_room_split_and_joined_again_is_the_room_it_was():
+    g, three = three_in_a_row()
+    four = from_phone(rooms.cut(three, ((10.0, 1.0), (10.0, 2.0)), g))
+    assert [r.name for r in four] == ["Kitchen", "Pantry", "Living room", "Room 1"]
+    assert four[:2] == three[:2]
+    back = rooms.join(four, 3, 2, g)
+    assert [r.name for r in back] == ["Kitchen", "Pantry", "Living room"]
+    assert iou(floor_of(g, back[2]), floor_of(g, three[2])) > 0.98 and abs(back[2].area - three[2].area) < 0.15

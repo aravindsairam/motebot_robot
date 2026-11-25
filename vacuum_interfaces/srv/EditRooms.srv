@@ -1,0 +1,16 @@
+# Change the rooms by hand: /rooms/edit, served by the rooms node. Two rooms that touch are joined
+# into one, or one room is cut in two along a line. Nothing is saved: the answer is the whole new
+# list, a proposal like the one /rooms/find gives. Refused, with the reason, when the two rooms do
+# not touch or the line does not cut a room in two.
+uint8 JOIN = 1    # rooms `a` and `b` become one, under the name of the bigger
+uint8 CUT = 2     # the room `line` lies in is cut in two along it: the bigger part keeps the name, the other is "Room n"
+
+Room[] rooms      # the rooms as they are now (they need not be the saved ones)
+uint8 change      # JOIN or CUT
+uint32 a          # JOIN: the two rooms, by their place in `rooms` (from 0)
+uint32 b
+float64[4] line   # CUT: x0, y0, x1, y1 in the map frame (metres); it is carried on to the room's walls
+---
+bool success
+string message
+Room[] rooms      # the new list
