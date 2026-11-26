@@ -7,7 +7,7 @@ it gives to a phone that connects late. The robot works the same whether or not 
     /robot_state     vacuum_interfaces/msg/RobotState    -> RobotState     (on change, 2 a second)
     /safety_status   vacuum_interfaces/msg/SafetyStatus  -> SafetyStatus   (on change, otherwise 2 a second)
     /map             nav_msgs/msg/OccupancyGrid          -> Map            (on change, at most 1 a second)
-    TF map -> base_link                                  -> RobotPose      (10 a second, when TF has news)
+    TF map -> base_link                                  -> RobotPose      (20 a second, when TF has news)
     /plan            nav_msgs/msg/Path                   -> Route          (when Nav2 plans, at most 2 a second)
     navigate_to_pose status + feedback                   -> NavigationStatus (the newest goal, whoever sent it)
     the zones file of the map in use (see zones.py)      -> NoGoZones      (when the map or the file changes)
@@ -118,7 +118,9 @@ ASK_TIMEOUT = 600.0
 NAME_ROOMS_TIMEOUT = 900.0  # a drive to every room, and a look in each
 
 
-POSE_PERIOD = 0.1  # s between robot positions (computer's clock)
+# s between robot positions (computer's clock). The app draws the robot gliding from one to the
+# next, so it shows the robot about this much behind where it is: 20 a second keeps that short.
+POSE_PERIOD = 0.05
 ZONES_CHECK_PERIOD = 2.0  # s between looks at the zones file of the map in use
 
 
