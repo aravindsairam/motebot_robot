@@ -20,7 +20,7 @@ import threading
 import rclpy
 from rclpy.executors import ExternalShutdownException, SingleThreadedExecutor
 from rclpy.node import Node
-from rclpy.qos import qos_profile_sensor_data
+from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 from rclpy.signals import SignalHandlerOptions
 from sensor_msgs.msg import Image
 
@@ -30,6 +30,12 @@ requirements.check_or_exit()
 
 from . import frames  # noqa: E402
 from .server import VideoServer  # noqa: E402
+
+
+# The camera's pictures are about 1 MB each. Sent best-effort, a picture is lost whenever one of
+# its pieces is: only 59 % of them arrived. Reliable, every one arrives, about 16 ms after it
+# was taken. Only the newest is kept.
+CAMERA_QOS = QoSProfile(depth=1, history=HistoryPolicy.KEEP_LAST, reliability=ReliabilityPolicy.RELIABLE)
 
 
 class CameraSide(Node):
@@ -48,7 +54,7 @@ class CameraSide(Node):
     def watch(self, on: bool) -> None:
         """Subscribe while someone watches. Call on the ROS thread."""
         if on and self._sub is None:
-            self._sub = self.create_subscription(Image, self.param("camera_topic"), self._on_image, qos_profile_sensor_data)
+            self._sub = self.create_subscription(Image, self.param("camera_topic"), self._on_image, CAMERA_QOS)
             self.get_logger().info(f"a phone is watching: subscribed to {self.param('camera_topic')}")
         elif not on and self._sub is not None:
             self.destroy_subscription(self._sub)
